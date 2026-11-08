@@ -180,9 +180,9 @@ def set_switch(ctx: ActionContext, p: dict) -> dict:
     on = bool(p["on"])
     auto_off = ctx.gate.switch_auto_off(True, p.get("auto_off_s")) if on else None
     ctx.module.cancel_auto_off(dev.id)
-    dev.set(on)
-    if on and auto_off:
+    if on and auto_off:  # armed before 'on' is sent, so it still fires when the relay's reply is lost
         ctx.module.schedule_auto_off(dev, auto_off, ctx.log)
+    dev.set(on)
     return dict(dev.snapshot(), auto_off_s=auto_off)
 
 
@@ -293,7 +293,8 @@ def register_common(m: Module) -> None:
                      ("device", "target_c", "timeout_s"), precheck=pre_heat,
                      description="Heat with a mandatory timeout. Unmeasured heaters in real mode: <= 40 C, <= 6.5 V."))
         m.add(Action("heat_off", heat_off, {"device": {"type": "string", "enum": of(("heater",))}}, ("device",),
-                     any_client=True, concurrent=True, description="Heater output and relay off. Any client."))
+                     any_client=True, concurrent=True, allowed_when_locked=True,
+                     description="Heater output and relay off. Any client, also while the module is locked."))
     zone_names = m.zone_names()
     if zone_names:
         zone_devs = sorted(d for d in m.devices if any(d in m.zones.zones[z]["devices"] for z in zone_names))

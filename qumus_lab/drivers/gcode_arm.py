@@ -99,6 +99,8 @@ class GcodeArm(Device):
         """Send one G-code line and wait for ``ok`` (unless it is an M888 line)."""
         self.require_connected()
         with self._lock:
+            if cmd.split(" ", 1)[0].upper() in ("G0", "G1", "G2", "G3", "G28"):
+                self.check_not_stopped()
             self._write_line(cmd)
             if cmd.strip().upper().startswith(NO_OK_PREFIXES):
                 return ""
@@ -212,7 +214,10 @@ class GcodeArm(Device):
         self.nozzle_deg = float(int(deg))
 
     def stop(self) -> bool | None:
-        if not self.connected or not self.moving:
+        if not self.connected:
+            return None
+        self._stop_evt.set()  # no further queued move is sent (e.g. approach -> final)
+        if not self.moving:
             return None
         if not self.stop_gcode:
             return False  # v1 had no stop command: cannot confirm (docs/open-questions.md)

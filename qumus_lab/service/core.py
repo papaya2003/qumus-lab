@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..drivers.base import DriverError, OutcomeUnknown, Refused
+from ..drivers.base import DriverError, Interrupted, OutcomeUnknown, Refused
 from ..modules.base import ActionContext, Cancelled, Module
 from ..safety.gate import GateContext, Rejected
 from ..state.store import LabStore
@@ -66,6 +66,7 @@ class ContractService:
         if journal_dir is not None:
             journal_dir.mkdir(parents=True, exist_ok=True)
             self.journal_path = journal_dir / f"{self.name}-{time.strftime('%Y%m%d')}.jsonl"
+        module.on_fault = lambda code, message: self._lock_service(code, message)
         self._watchdog_stop = threading.Event()
         self._watchdog = threading.Thread(target=self._watch, daemon=True, name=f"watchdog-{self.name}")
         self._watchdog.start()
@@ -220,7 +221,7 @@ class ContractService:
             raise ApiError(exc.status, str(exc)) from exc
         with self.lock:
             self._expire_lease_locked()
-            if self.locked:
+            if self.locked and not action.allowed_when_locked:
                 raise ApiError(409, "service is locked (unknown outcome); a person must unlock it on the lab PC")
             if not action.any_client and (self.lease is None or self.lease.holder != client):
                 holder = self.lease.holder if self.lease else None
@@ -230,6 +231,10 @@ class ContractService:
                     raise ApiError(409, f"busy with {self.busy_command['action']}")
                 self.busy_command = {"id": command_id, "action": name, "client": client}
                 self._cancel.clear()
+                # A stop latches in each motion driver until the next command is accepted, so a stop that
+                # lands between the action's last cancel check and its next driver call is not lost.
+                for dev in self.module.motion_devices():
+                    dev.clear_stop()
             self.emit("command accepted", {"id": command_id, "action": name, "client": client, "params": params})
         t = threading.Thread(target=self._run, args=(action, params, command_id, client, gctx), daemon=True,
                              name=f"{self.name}-{name}")
@@ -253,6 +258,8 @@ class ContractService:
             output = action.fn(ctx, params)
         except Cancelled:
             result, message, level = "stopped", "stopped before completion", "warning"
+        except Interrupted as exc:
+            result, message, level = "stopped", f"stopped before completion ({exc})", "warning"
         except Rejected as exc:
             result, message, level = "rejected", str(exc), "warning"
         except Refused as exc:
@@ -307,11 +314,16 @@ class ContractService:
         if heat_off:
             for dev in self.module.devices.values():
                 if dev.kind == "heater" and dev.connected:
-                    dev.off("stop")
+                    try:
+                        dev.off("stop")
+                    except Exception as exc:  # noqa: BLE001 - keep stopping the rest
+                        unconfirmed.append(dev.id)
+                        self._lock_service("heat_off_unconfirmed", f"{type(exc).__name__}: {exc}")
         idle = self.wait_idle(wait_s) if wait_s > 0 else self.busy_command is None
         if unconfirmed:
             verdict = "unconfirmed"
-            self._lock_service("stop_unconfirmed", f"could not confirm stop of {', '.join(unconfirmed)}")
+            if not self.locked:
+                self._lock_service("stop_unconfirmed", f"could not confirm stop of {', '.join(unconfirmed)}")
         elif idle:
             verdict = "confirmed"
         else:
@@ -349,6 +361,10 @@ class ContractService:
             with self.lock:
                 self._expire_lease_locked()
                 since = self._no_lease_since
+            try:
+                self._supervise_heaters()
+            except Exception as exc:  # noqa: BLE001 - the watchdog must keep running
+                self.emit("heater supervisor error", {"error": f"{type(exc).__name__}: {exc}"}, "error")
             if since is None:
                 self._record_heaters()
                 continue
@@ -358,8 +374,28 @@ class ContractService:
                 if dev.kind == "heater" and getattr(dev, "heating", False):
                     limit = self.orphan_timeout_s.get(dev.id, 600.0)
                     if idle_s > limit:
-                        dev.off("orphan timeout (no lease holder)")
+                        self._heater_off(dev, "orphan timeout (no lease holder)")
                         self.emit("heater orphan timeout", {"device": dev.id, "after_s": round(idle_s)}, "warning")
+
+    def _supervise_heaters(self) -> None:
+        """A heater in a heating phase whose control thread is gone has nobody enforcing its timeout:
+        switch it off. A heater whose off could not be confirmed keeps the module locked."""
+        for dev in self.module.devices.values():
+            if dev.kind != "heater" or not dev.connected:
+                continue
+            if dev.control_lost():
+                self.emit("heater control thread stopped", {"device": dev.id, "phase": dev.phase}, "error")
+                self._heater_off(dev, "control thread stopped unexpectedly")
+            elif dev.phase == "off_unconfirmed" and not self.locked:
+                self._lock_service("heat_off_unconfirmed",
+                                   f"{dev.id}: heater off not confirmed ({dev.last_error}); retry heat_off")
+
+    def _heater_off(self, dev, reason: str) -> None:
+        try:
+            dev.off(reason)
+        except Exception as exc:  # noqa: BLE001 - the watchdog must keep running
+            if not self.locked:
+                self._lock_service("heat_off_unconfirmed", f"{type(exc).__name__}: {exc}")
 
     def _record_heaters(self, every_s: float = 10.0) -> None:
         """While a heater has a target, write its row every 10 s (its control thread reads the thermometer

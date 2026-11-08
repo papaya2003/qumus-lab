@@ -57,6 +57,7 @@ class Action:
     motion: bool = False
     local_only: bool = False
     any_client: bool = False
+    allowed_when_locked: bool = False  # heat_off: switching heat off must work while the module is locked
     concurrent: bool = False
     description: str = ""
     #: synchronous gate checks (no I/O) run before the command is accepted, so caps fail with 400 at once
@@ -68,7 +69,8 @@ class Action:
 
     def describe(self) -> dict:
         return {"params": self.schema(), "any_client": self.any_client, "motion": self.motion,
-                "local_only": self.local_only, "description": self.description}
+                "local_only": self.local_only, "allowed_when_locked": self.allowed_when_locked,
+                "description": self.description}
 
     def validate(self, params: dict) -> dict:
         out = {}
@@ -118,6 +120,8 @@ class Module:
         self.gate = SafetyGate(config, name, demo)
         self.actions: dict[str, Action] = {}
         self._switch_timers: dict[str, threading.Timer] = {}
+        #: set by the service: lock the module (code, message) when an off can not be confirmed
+        self.on_fault: Callable[[str, str], None] | None = None
 
     def add(self, action: Action) -> None:
         self.actions[action.name] = action
@@ -154,6 +158,8 @@ class Module:
                 log("switch_auto_off", {"device": dev.id, "after_s": seconds})
             except Exception as exc:  # noqa: BLE001
                 log("switch_auto_off_failed", {"device": dev.id, "error": str(exc)})
+                if self.on_fault is not None:  # the switch may still be on: same rule as any unknown outcome
+                    self.on_fault("switch_auto_off_failed", f"{dev.id}: auto-off not confirmed ({exc})")
 
         t = threading.Timer(seconds, fire)
         t.daemon = True

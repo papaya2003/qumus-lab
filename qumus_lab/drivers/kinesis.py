@@ -13,11 +13,10 @@ pythonnet and the Kinesis DLLs are imported lazily and only on Windows (path in 
 
 from __future__ import annotations
 
-import threading
 import time
 from typing import Protocol
 
-from .base import Device, NoReply, OutcomeUnknown, Refused
+from .base import Device, Interrupted, NoReply, OutcomeUnknown, Refused
 
 
 class KCubeBackend(Protocol):
@@ -143,6 +142,8 @@ class KinesisAxis:
         mm = float(mm)
         if not self.min_mm <= mm <= self.max_mm:
             raise Refused(f"axis {self.name}: {mm} mm outside [{self.min_mm}, {self.max_mm}]")
+        if stop_evt is not None and stop_evt.is_set():
+            raise Interrupted(f"axis {self.name}: stop requested; move not sent")
         if not self.enabled:
             self.backend.enable()
             self.enabled = True
@@ -154,7 +155,10 @@ class KinesisAxis:
         t0 = time.monotonic()
         while self.backend.is_moving():
             if stop_evt is not None and stop_evt.is_set():
-                break
+                # the stop may have reached the K-Cube just before this move: stop again, then report it
+                self.backend.stop()
+                self.read()
+                raise Interrupted(f"axis {self.name}: stopped during the move")
             if time.monotonic() - t0 > self.move_timeout_s:
                 raise OutcomeUnknown(f"axis {self.name}: still moving after {self.move_timeout_s} s")
             time.sleep(0.05)
@@ -182,8 +186,11 @@ class StampManipulator(Device):
         self.rail = rail  # KZ100Stage with one axis "rail"
         self.fields = {f"{a}_mm": "mm" for a in self.axes if a != "goni"}
         self.fields.update({"goni_deg": "deg", "rail_mm": "mm"})
-        self._stop_evt = threading.Event()
         self.moving = False
+
+    def clear_stop(self) -> None:
+        super().clear_stop()
+        self.rail.clear_stop()
 
     def goni_deg(self, pos_mm: float | None) -> float | None:
         if pos_mm is None:
@@ -238,7 +245,7 @@ class StampManipulator(Device):
 
     def move_to(self, axis: str, mm: float) -> float:
         self.require_connected()
-        self._stop_evt.clear()
+        self.check_not_stopped()
         self.moving = True
         try:
             if axis == "rail":

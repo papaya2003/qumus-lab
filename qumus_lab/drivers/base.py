@@ -33,6 +33,10 @@ class OutcomeUnknown(DriverError):
     """An actuating command was sent but its result is unknown. The service locks; never retry."""
 
 
+class Interrupted(DriverError):
+    """A stop request arrived: the driver did not send the next motion command."""
+
+
 class Refused(DriverError):
     """The command was refused before any byte was sent."""
 
@@ -60,6 +64,10 @@ class Device:
         self.last_error: str | None = None
         self.last_read_unix: float | None = None
         self._lock = threading.RLock()
+        #: set by stop(); motion commands check it right before sending and raise Interrupted. It stays set
+        #: until the service starts the next command (clear_stop), so a stop that lands between two
+        #: driver calls of one action is never lost.
+        self._stop_evt = threading.Event()
 
     # lifecycle -------------------------------------------------------
     def connect(self) -> None:
@@ -85,6 +93,14 @@ class Device:
         out = {"kind": self.kind, "connected": self.connected, "error": self.last_error}
         out.update(self.snapshot())
         return out
+
+    def clear_stop(self) -> None:
+        """Forget an earlier stop request (the service calls this when a new command starts)."""
+        self._stop_evt.clear()
+
+    def check_not_stopped(self) -> None:
+        if self._stop_evt.is_set():
+            raise Interrupted(f"{self.id}: stop requested; motion command not sent")
 
     def stamp_read(self) -> None:
         self.last_read_unix = time.time()
