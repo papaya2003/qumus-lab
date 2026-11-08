@@ -14,6 +14,15 @@
 
 version: 1
 
+# Shared zones: an arm must hold the zone's lock (action zone_acquire) before go_to_point sends it to a
+# point inside. One holder at a time across both modules (qumus_lab/safety/zones.py). The lock is
+# released when the arm finishes a move to a point outside, or by zone_release / a person (zone_clear).
+zones:
+  middle_board:
+    description: "middle board slots S1-S14: hand-over between the left and the right arm"
+    devices: [arm_left, arm_right]
+    points: ["arm_left.slot_S*", "arm_right.slot_S*"]
+
 points:
   arm_left:
     park:              {xyz: [0, 220, 95],   source: v1, cite: {at: "common/hardware/robot_arm_controller.py:171", check: "X0 Y220 Z95"}}

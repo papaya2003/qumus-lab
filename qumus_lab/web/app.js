@@ -199,10 +199,37 @@ function renderStatus(m) {
   if (st.locked) parts.push(h("button", { type: "button", class: "primary", onclick: () => unlock(m.name) }, "Unlock"));
   const lease = st.lease ? (st.lease.holder === CLIENT ? "you have control" : `controlled by ${st.lease.holder}`) : "nobody has control";
   parts.push(h("span", { class: "muted" }, lease));
+  for (const [zone, z] of Object.entries(st.zones || {})) parts.push(...zoneParts(m, zone, z));
   const lc = st.last_command;
   if (m.flash && m.flash.until > Date.now()) parts.push(h("span", { class: "last " + m.flash.cls }, m.flash.text));
   else if (lc) parts.push(h("span", { class: "last " + lc.result }, `${lc.action}: ${lc.result}${lc.message ? ", " + lc.message : ""}`));
   box.replaceChildren(...parts);
+}
+
+/* Middle board occupancy lock: shared by both modules (one arm at a time). */
+function zoneParts(m, zone, z) {
+  const label = zone.replace(/_/g, " ");
+  const c = m.describe.commands.zone_acquire;
+  const arms = c ? c.params.properties.device.enum : [];
+  const out = [h("span", { class: "zone" + (z.holder ? " held" : "") },
+    z.holder ? `${label}: held by ${z.holder}${z.inside.length ? " (inside)" : ""}` : `${label}: free`)];
+  const ctl = canRun(m, "zone_acquire");
+  for (const arm of arms) {
+    if (!z.holder) {
+      out.push(h("button", { type: "button", disabled: ctl.ok ? undefined : "", title: ctl.ok ? "" : ctl.why,
+        onclick: () => send(m.name, "zone_acquire", { zone, device: arm }) }, `Take for ${arm}`));
+    } else if (z.holder === arm) {
+      out.push(h("button", { type: "button", disabled: ctl.ok && !z.inside.length ? undefined : "",
+        title: z.inside.length ? "move the arm out first" : (ctl.ok ? "" : ctl.why),
+        onclick: () => send(m.name, "zone_release", { zone, device: arm }) }, "Release"));
+    }
+  }
+  if (z.holder) {
+    out.push(h("button", { type: "button", onclick: () => {
+      if (confirm(`Clear ${label}? Only after you checked by eye that no arm is in it.`)) send(m.name, "zone_clear", { zone });
+    } }, "Clear"));
+  }
+  return out;
 }
 
 async function unlock(mod) {

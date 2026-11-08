@@ -9,8 +9,9 @@
     qumus-probe heat <device> <target_c> --timeout S   L2: first heat <= 40 C, <= 6.5 V
     qumus-probe l2                          L2: guided walk through one actuator at a time (Enter / s / q)
 
-Add --demo to try any command on simulated devices. Every step is logged to
-runs/real-lab/probe/<date>-probe.jsonl. Ctrl+C at any time -> safe_state (stop axes, heat off).
+Add --demo to try any command on simulated devices (records go to runs/demo/). Every step is logged
+to runs/real-lab/probe/<date>-probe.jsonl; readings also go to the device table of
+runs/real-lab/qumus.db. Ctrl+C at any time -> safe_state (stop axes, heat off).
 Commands go through the same module actions and SafetyGate as the services (client "probe", loopback).
 """
 
@@ -353,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("l2")
     args = ap.parse_args(argv)
 
-    config = load_config(args.config_dir, args.runs_dir)
+    config = load_config(args.config_dir, args.runs_dir, demo=args.demo)
     probe = Probe(config, demo=args.demo)
     probe.out(f"qumus-probe {args.cmd} ({'DEMO, simulated devices' if args.demo else 'REAL instruments'}); "
               f"log: {probe.log.path}")

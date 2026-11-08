@@ -21,8 +21,10 @@ from .lab import Lab, build_lab, demo_backends, real_backends
 from .modules.base import Module
 from .modules.exfoliation import build_exfoliation
 from .modules.stacking import build_stacking
+from .safety.zones import ZoneRegistry
 from .service.core import ContractService
 from .service.http import make_server, serve_in_thread
+from .state.store import LabStore
 
 BUILDERS = {"exfoliation": build_exfoliation, "stacking": build_stacking}
 
@@ -32,6 +34,8 @@ class Stack:
     config: LabConfig
     lab: Lab
     services: dict[str, ContractService]
+    store: LabStore | None = None
+    zones: ZoneRegistry | None = None
 
     def safe_state(self, reason: str) -> None:
         for svc in self.services.values():
@@ -44,10 +48,12 @@ class Stack:
         for svc in self.services.values():
             svc.close()
         self.lab.close_all()
+        if self.store is not None:
+            self.store.close()
 
 
 def build_stack(config: LabConfig, *, demo: bool, modules: list[str] | None = None, connect: bool = True,
-                demo_speed: float = 5.0) -> Stack:
+                demo_speed: float = 5.0, use_store: bool = True) -> Stack:
     modules = modules or config.module_names
     backends = demo_backends(config, demo_speed) if demo else real_backends()
     lab = build_lab(config, backends, modules)
@@ -55,16 +61,33 @@ def build_stack(config: LabConfig, *, demo: bool, modules: list[str] | None = No
         lab.connect_all()
     services = {}
     journal = config.runs_dir / "events"
+    store = LabStore.for_runs_dir(config.runs_dir, demo) if use_store else None
+    zone_events: list[tuple] = []
+    zones = ZoneRegistry(config.points.get("zones"), store, lambda *ev: zone_events.append(ev))
     for name in modules:
-        mod = Module(name, config, lab.module_devices(name), demo, lab.shared)
+        mod = Module(name, config, lab.module_devices(name), demo, lab.shared, zones)
         BUILDERS[name](mod)
-        svc = ContractService(mod, journal_dir=journal)
+        svc = ContractService(mod, journal_dir=journal, store=store)
         for dev_id, dev in mod.devices.items():
             if dev.last_error:
                 svc.emit("device not connected", {"device": dev_id, "error": dev.last_error}, "warning")
         svc.emit("service started", {"demo": demo, "devices": sorted(mod.devices)})
+        svc.record_devices(list(mod.devices), initial=True)
         services[name] = svc
-    return Stack(config, lab, services)
+    _route_zone_events(zones, services, zone_events)
+    return Stack(config, lab, services, store, zones)
+
+
+def _route_zone_events(zones: ZoneRegistry, services: dict[str, ContractService], early: list[tuple]) -> None:
+    """Zone events go to the journal of every module that uses the zone."""
+    def emit(message: str, fields: dict, level: str = "info") -> None:
+        for svc in services.values():
+            if fields.get("zone") in svc.module.zone_names():
+                svc.emit(message, fields, level)
+
+    zones._emit = emit
+    for ev in early:
+        emit(*ev)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    config = load_config(args.config_dir, args.runs_dir)
+    config = load_config(args.config_dir, args.runs_dir, demo=args.demo)
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     stack = build_stack(config, demo=args.demo, modules=modules, demo_speed=args.demo_speed)
     servers = []

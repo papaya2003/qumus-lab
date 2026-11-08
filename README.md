@@ -77,6 +77,8 @@ qumus_lab/
   service/         contract v1 core and HTTP layer
   probe/cli.py     L1-L2 probe
   selfcheck.py     lab PC self-check (scripts\check.bat)
+  state/           qumus.db tables (device / sample / event / zone); scripts\state.bat to look
+  safety/zones.py  middle-board occupancy lock
   sim/             instrument emulators and the simulated world for --demo
   web/             debug page
   launcher.py      starts both services + debug page in one process
@@ -89,4 +91,4 @@ docs/              architecture, contract, v1 mapping, open questions, debug pag
 
 Docs: [architecture](docs/architecture.md), [contract](docs/contract.md),
 [v1 mapping and hazards](docs/v1-mapping.md), [open questions](docs/open-questions.md),
-[debug page design](docs/debug-page-design.md).
+[debug page design](docs/debug-page-design.md), [lab state and middle-board lock](docs/lab-state.md).

@@ -81,6 +81,8 @@ input[type="number"] { width: 5.2em; }
 .status .pill.locked { color: #fff; background: var(--fault); padding: 0 8px; border-radius: 3px; }
 .status .last.failed, .status .last.rejected { color: var(--fault); }
 .status .last.stopped { color: var(--warn); }
+.status .zone { padding: 0 8px; border: 1px solid var(--line); border-radius: 3px; }
+.status .zone.held { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 .goto { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0 10px; border-bottom: 1px solid var(--line); }
 .goto select { max-width: 260px; }
 .goto .hint { font-size: 13px; }

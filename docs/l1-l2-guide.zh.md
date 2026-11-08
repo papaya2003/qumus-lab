@@ -84,6 +84,7 @@ scripts\probe.bat l1
 | 三个相机 | 打开照片：左桌面相机拍到左侧，右桌面相机拍到右侧，显微镜相机是显微画面。对不上就告诉 Claude |
 
 - 报告保存在 `runs\real-lab\probe\` 里（`...-l1-report.json`）。
+- 读到的值也写进了状态表：`scripts\state.bat devices` 可以看到每台仪器最后一次读数和读取时间。
 
 ## 第 6 步：L2 一次只动一个仪器
 

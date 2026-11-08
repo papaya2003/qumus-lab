@@ -29,6 +29,8 @@ def test_stopping_a_moving_arm_is_unconfirmed_and_locks(cfg):
     try:
         svc = stack.services["exfoliation"]
         svc.heartbeat("agent")
+        r = svc.command({"action": "zone_acquire", "zone": "middle_board", "device": "arm_left"}, "agent", loopback=True)
+        assert wait_done(svc, r["command_id"])["result"] == "ok"
         svc.command({"action": "go_to_point", "point": "arm_left.slot_S7"}, "agent", loopback=True)
         wait_for(lambda: stack.lab.devices["arm_left"].moving, timeout=5)
         out = svc.stop(wait_s=0.5)
