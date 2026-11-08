@@ -53,7 +53,8 @@ class DracalThermometer(Device):
 
 def _run_cli(argv: list[str], timeout_s: float) -> str:
     try:
-        return subprocess.check_output(argv, stderr=subprocess.STDOUT, text=True, timeout=timeout_s).strip()
+        return subprocess.check_output(argv, stderr=subprocess.STDOUT, text=True, errors="replace",
+                                       timeout=timeout_s).strip()
     except FileNotFoundError as exc:
         raise NoReply(f"Dracal CLI not found: {argv[0]}") from exc
     except subprocess.TimeoutExpired as exc:

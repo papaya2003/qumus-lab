@@ -132,7 +132,7 @@ class Probe:
         seen = {p["port"].upper(): p for p in list_serial_ports()}
         rows = []
         self.out("L1 ports: config/devices.yaml vs ports Windows reports (nothing is opened)")
-        for dev_id, port, what in self._configured_ports():
+        for dev_id, port, what in self.config.configured_ports():
             hit = seen.get(port.upper())
             rows.append({"device": dev_id, "port": port, "present": bool(hit), "description": hit and hit["description"]})
             mark = "present" if hit else "MISSING"
@@ -143,18 +143,6 @@ class Probe:
         self.out("  Kinesis serials, cameras and the Dracal exe are checked by `read`.")
         self.log.write("ports", rows=rows, unconfigured=extra)
         return rows
-
-    def _configured_ports(self):
-        sh = self.config.devices.get("shared", {})
-        yield "power_supply", sh["power_supply"]["port"]["port"], "tp3005p"
-        for dev_id in self.config.all_device_ids():
-            cfg = self.config.device_cfg(dev_id)
-            if "port" in cfg:
-                yield dev_id, cfg["port"]["port"], cfg["driver"]
-            if cfg.get("relay"):
-                yield f"{dev_id}.relay", cfg["relay"]["port"]["port"], "relay"
-            if cfg.get("rail"):
-                yield f"{dev_id}.rail", cfg["rail"]["port"]["port"], "kz100"
 
     def read(self, target: str) -> dict:
         ids = self.config.all_device_ids() if target == "all" else ([] if target == "power_supply" else [target])

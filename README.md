@@ -35,6 +35,8 @@ code that will talk to the real instruments.
 
 1. `scripts\setup.bat` (creates `.venv`, installs the lab extras: OpenCV, numpy, pythonnet).
 2. Check `config\devices.yaml` (COM ports, Kinesis serials, Dracal exe path, Uvcham SDK folder).
+   Then `scripts\check.bat`: self-check of Python, packages, config, vendor paths, the COM ports
+   Windows sees, and a demo start of both services (opens no instrument port). Fix every FAIL line.
 3. **L1, read only** (opens ports and queries; nothing moves, nothing is switched or heated):
 
    ```bat
@@ -74,6 +76,7 @@ qumus_lab/
   modules/         actions per module (compose driver operations + named points)
   service/         contract v1 core and HTTP layer
   probe/cli.py     L1-L2 probe
+  selfcheck.py     lab PC self-check (scripts\check.bat)
   sim/             instrument emulators and the simulated world for --demo
   web/             debug page
   launcher.py      starts both services + debug page in one process
