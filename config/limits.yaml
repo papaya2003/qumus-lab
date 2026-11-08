@@ -1,0 +1,72 @@
+# Limits read by the SafetyGate. Every command of every module goes through the gate.
+#
+# source: v1       = number found in v1 (cite), a starting point only
+# source: qumus    = chosen for Qumus tonight (no v1 value exists); see docs/open-questions.md
+# source: measured = measured on the lab PC (L3); only these unlock real motion beyond the probe caps
+
+version: 1
+
+# Real mode: motion to a named point needs a `source: measured` point and measured axis ranges.
+# --demo ignores this (simulated devices).
+require_measured_for_motion: true
+
+# local_only probe / debug-page caps (contract [Q]); apply in real and demo mode
+probe:
+  arm_jog_max_mm: 0.5
+  stage_jog_max_mm: 0.5
+  stamp_jog_max_mm: 0.1
+  gantry_jog_max_mm: 0.5
+  focus_jog_max_um: 50
+  reel_jog_max_deg: 10
+  jog_feed_mm_min: 300          # arm / gantry feed used by jog
+  switch_auto_off_max_s: 10
+  first_heat_max_c: 40
+  heat_max_volts: 6.5           # v1 approved pair 30 C -> 6.5 V (exfoliation_setpoints.py:8)
+  heat_timeout_max_s: 600
+  source: qumus
+
+arms:
+  arm_left:
+    max_feed_mm_min: 5000       # v1 travelled at F5000
+    travel_feed_mm_min: 1000    # used by go_to_point; v1 approach feed F1000
+    min_z_mm: null              # unknown until L3
+    source: v1
+    cite: {at: "common/hardware/robot_arm_controller.py:219", check: "F1000"}
+  arm_right:
+    max_feed_mm_min: 5000
+    travel_feed_mm_min: 1000
+    min_z_mm: null
+    source: v1
+    cite: {at: "common/hardware/robot_arm_controller.py:240", check: "F1000"}
+
+axes:
+  sample_stage:
+    rail: {min_mm: 0.0, max_mm: 120.0, source: v1, cite: {at: "common/hardware/sample_PDV_controller.py:61", check: "120.0"}}
+    x:    {min_mm: null, max_mm: null, source: qumus}   # v1 had no x/y limit
+    y:    {min_mm: null, max_mm: null, source: qumus}
+  stamp:
+    x:    {min_mm: 0.0, max_mm: 13.0, source: v1, cite: {at: "common/hardware/KST201_controller.py:28", check: "13.0"}}
+    y:    {min_mm: 0.0, max_mm: 13.0, source: v1, cite: {at: "common/hardware/KST201_controller.py:28", check: "13.0"}}
+    z:    {min_mm: 0.0, max_mm: 13.0, source: v1, cite: {at: "common/hardware/KST201_controller.py:28", check: "13.0"}}
+    rail: {min_mm: 0.0, max_mm: 195.0, source: v1, cite: {at: "common/hardware/transfer_control_controller.py:43", check: "195.0"}}
+  focus:
+    z:    {max_move_um: 30000, source: v1, cite: {at: "common/hardware/focus_controller.py:24", check: "30000.0"}}
+
+heaters:
+  exfoliation_heater:
+    max_c: 90                   # highest v1 approved target (exfoliation_setpoints.py:11)
+    max_timeout_s: 1800
+    orphan_timeout_s: 600       # no lease holder for this long while heating -> off (contract)
+    overshoot_c: 15
+    source: v1
+    cite: {at: "common/logic/exfoliation_setpoints.py:11", check: "(90.0, 17.0)"}
+  transfer_heater:
+    max_c: 175                  # v1 melt threshold 170 C + margin
+    max_timeout_s: 7200
+    orphan_timeout_s: 600
+    overshoot_c: 15
+    source: v1
+    cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_drop_down.py:90", check: "170.0"}
+
+switches:
+  auto_off_default_s: 10        # set_switch from the probe/debug page turns itself off after this

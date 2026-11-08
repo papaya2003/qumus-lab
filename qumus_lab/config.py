@@ -1,0 +1,66 @@
+"""Load config/devices.yaml, points.yaml and limits.yaml (UTF-8, pathlib; works on Windows)."""
+
+from __future__ import annotations
+
+import copy
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_DIR = REPO_ROOT / "config"
+DEFAULT_RUNS_DIR = REPO_ROOT / "runs" / "real-lab"
+
+
+def load_yaml(path: Path) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+@dataclass
+class LabConfig:
+    devices: dict
+    points: dict
+    limits: dict
+    config_dir: Path
+    runs_dir: Path
+
+    @property
+    def module_names(self) -> list[str]:
+        return list(self.devices.get("modules", {}))
+
+    def module(self, name: str) -> dict:
+        return self.devices["modules"][name]
+
+    def module_of(self, device_id: str) -> str | None:
+        for name, mod in self.devices.get("modules", {}).items():
+            if device_id in mod.get("devices", {}):
+                return name
+        return None
+
+    def device_cfg(self, device_id: str) -> dict:
+        mod = self.module_of(device_id)
+        if mod is None:
+            raise KeyError(device_id)
+        return self.devices["modules"][mod]["devices"][device_id]
+
+    def all_device_ids(self) -> list[str]:
+        return [d for m in self.module_names for d in self.module(m)["devices"]]
+
+    def copy(self) -> LabConfig:
+        return LabConfig(copy.deepcopy(self.devices), copy.deepcopy(self.points), copy.deepcopy(self.limits),
+                         self.config_dir, self.runs_dir)
+
+
+def load_config(config_dir: str | Path | None = None, runs_dir: str | Path | None = None) -> LabConfig:
+    cdir = Path(config_dir or os.environ.get("QUMUS_LAB_CONFIG") or DEFAULT_CONFIG_DIR)
+    rdir = Path(runs_dir or os.environ.get("QUMUS_LAB_RUNS") or DEFAULT_RUNS_DIR)
+    return LabConfig(
+        devices=load_yaml(cdir / "devices.yaml"),
+        points=load_yaml(cdir / "points.yaml"),
+        limits=load_yaml(cdir / "limits.yaml"),
+        config_dir=cdir,
+        runs_dir=rdir,
+    )
