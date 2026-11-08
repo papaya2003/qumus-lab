@@ -1,0 +1,180 @@
+# Which port each instrument is on and how to talk to it. NO coordinates here (see points.yaml),
+# NO limits here (see limits.yaml).
+#
+# source: v1 = copied from the v1 code (path relative to the v1 repo root, file:line) and NOT yet
+# checked on the lab PC. Run `qumus-probe ports` (L1) on the lab PC and change `source` to `lab`
+# once a port is confirmed. tests/test_config_cites.py re-reads every `cite` from the v1 source.
+#
+# Modules: exfoliation (left side) and stacking (right side). Each device belongs to one module.
+# `shared` instruments are used by both modules (one TP3005P supply feeds both heaters via relays).
+
+version: 1
+
+shared:
+  power_supply:
+    driver: tp3005p
+    port: {port: COM8, baudrate: 9600, timeout: 1}
+    terminator: "/n"            # literal slash-n, as v1 sent it (confirm at L1: VOUT1? must answer)
+    max_voltage: 30.0
+    source: v1
+    cite: {at: "common/hardware/defaults.py:17", check: "COM8"}
+    cite_terminator: {at: "common/hardware/power_controller.py:31", check: "\"/n\""}
+  dracal:
+    exe_path: 'C:\Users\Qumus_PC\Desktop\DracalView\dracal-usb-get.exe'
+    index: "0"
+    unit: C
+    timeout_s: 5
+    source: v1
+    cite: {at: "common/hardware/defaults.py:28", check: "dracal-usb-get.exe"}
+
+modules:
+  exfoliation:
+    port: 8781
+    devices:
+      arm_left:
+        driver: gcode_arm
+        port: {port: COM7, baudrate: 115200, timeout: 0.1, write_timeout: 2}
+        reply_timeout_s: 2.0
+        open_settle_s: 2.0          # v1 waited 2 s after opening (board may reset on open)
+        stop_gcode: []              # v1 had no stop command; arm stop is reported "unconfirmed"
+        source: v1
+        cite: {at: "common/hardware/defaults.py:8", check: "COM7"}
+      exfoliation_vacuum:
+        driver: relay
+        port: {port: COM4, baudrate: 9600, timeout: 1}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:10", check: "COM4"}
+      exfoliation_fan:
+        driver: relay
+        port: {port: COM15, baudrate: 9600, timeout: 1}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:11", check: "COM15"}
+      exfoliation_heater:
+        driver: heater
+        relay: {port: {port: COM18, baudrate: 9600, timeout: 1}}
+        sensor_serial: E30559
+        other_heaters: [transfer_heater]
+        boost_voltage: 27.0
+        hold_voltage_by_target: {22: 0.0, 30: 6.5, 50: 10.0, 70: 13.5, 90: 17.0}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:15", check: "COM18"}
+        cite_sensor: {at: "common/hardware/defaults.py:29", check: "E30559"}
+        cite_hold: {at: "common/logic/exfoliation_setpoints.py:8", check: "(30.0, 6.5)"}
+        cite_boost: {at: "agents/processing_agent/workflows/exfoliation/molecule_flows/chip_exfoliation_molecule.py:150", check: "27.0"}
+      tape_reels:
+        driver: tape_reels
+        port: {port: COM3, baudrate: 115200, timeout: 1}
+        open_settle_s: 2.0          # Arduino resets on open
+        source: v1
+        cite: {at: "common/hardware/defaults.py:16", check: "COM3"}
+      tape_gantry:
+        driver: printer_gantry
+        port: {port: COM22, baudrate: 115200, timeout: 2}
+        stop_gcode: [M410]          # Marlin quick stop; NOT used by v1 (confirm at L2)
+        source: v1
+        cite: {at: "common/hardware/defaults.py:18", check: "COM22"}
+      desk_camera_left:
+        driver: opencv_camera
+        index: 0
+        width: 1920
+        height: 1080
+        source: v1
+        cite: {at: "agents/lab_manager_agent/tools/cv/config.py:60", check: "default_idx = 0 if is_left else 2"}
+
+  stacking:
+    port: 8782
+    devices:
+      arm_right:
+        driver: gcode_arm
+        port: {port: COM23, baudrate: 115200, timeout: 0.1, write_timeout: 2}
+        reply_timeout_s: 2.0
+        open_settle_s: 2.0
+        stop_gcode: []
+        source: v1
+        cite: {at: "common/hardware/defaults.py:9", check: "COM23"}
+      sample_stage:                 # KZ-100: x/y under the microscope + L rail (load 0 mm -> microscope 80 mm)
+        driver: kz100_stage
+        port: {port: COM9, baudrate: 57600, timeout: 3}
+        axes:
+          x: {channel: X, steps_per_mm: 12800}
+          y: {channel: Y, steps_per_mm: 12800}
+          rail: {channel: L, steps_per_mm: 3280}
+        settle_timeout_s: 60
+        source: v1
+        cite: {at: "common/hardware/defaults.py:19", check: "COM9"}
+        cite_steps: {at: "common/hardware/sample_PDV_controller.py:51", check: "12800.0"}
+        cite_rail_steps: {at: "common/hardware/sample_PDV_controller.py:52", check: "3280.0"}
+      stage_vacuum:
+        driver: relay
+        port: {port: COM14, baudrate: 9600, timeout: 1}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:12", check: "COM14"}
+      turret:
+        driver: turret
+        port: {port: COM10, baudrate: 9600, timeout: 3}
+        objectives: {5: 1, 10: 2, 20: 3, 100: 4}
+        expect_reply: false         # v1 never waited for oRDC (confirm at L2)
+        settle_s: 1.0
+        source: v1
+        cite: {at: "common/hardware/defaults.py:20", check: "COM10"}
+      focus:
+        driver: tmcl_focus
+        port: {port: COM11, baudrate: 115200, timeout: 4}
+        steps_per_um: 92.5
+        max_chunk_um: 30000
+        wait_s_per_um: 0.006
+        source: v1
+        cite: {at: "common/hardware/defaults.py:21", check: "COM11"}
+        cite_steps: {at: "common/hardware/focus_controller.py:23", check: "92.5"}
+      microscope_camera:
+        driver: uvcham_camera
+        index: 0
+        sdk_dir: 'C:\Users\Qumus_PC\Documents\Qumus'
+        source: v1
+        cite: {at: "common/hardware/defaults.py:22", check: "microscope_camera_index"}
+      stamp:                        # stamp holder: Kinesis x/y/z + read-only goniometer + KZ-100 L rail
+        driver: manipulator
+        kinesis_dir: 'C:\Program Files\Thorlabs\Kinesis'
+        move_timeout_s: 120
+        kinesis:
+          # NOTE: a second copy of v1 (agents/processing_agent/workflows/__init__.py) swaps the x/y serials.
+          x: {serial: "26007081", model: kst201}
+          y: {serial: "26007120", model: kst201}
+          z: {serial: "26006985", model: kst201}
+        goniometer:
+          serial: "27271252"
+          model: kdc101
+          calibration: {pos_left_mm: 0.0, deg_left: -8.6, pos_right_mm: 12.0, deg_right: 6.9}
+        rail:
+          port: {port: COM19, baudrate: 57600, timeout: 3}
+          axes: {rail: {channel: L, steps_per_mm: 3280}}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:23", check: "26007081"}
+        cite_y: {at: "common/hardware/defaults.py:24", check: "26007120"}
+        cite_z: {at: "common/hardware/defaults.py:25", check: "26006985"}
+        cite_goni: {at: "common/hardware/defaults.py:26", check: "27271252"}
+        cite_rail: {at: "common/hardware/defaults.py:27", check: "COM19"}
+      stamp_vacuum:                 # holds the stamp slide on the stamp holder
+        driver: relay
+        port: {port: COM13, baudrate: 9600, timeout: 1}
+        safe_state_on: true         # never drop the stamp on Stop
+        source: v1
+        cite: {at: "common/hardware/defaults.py:13", check: "COM13"}
+      transfer_heater:
+        driver: heater
+        relay: {port: {port: COM17, baudrate: 9600, timeout: 1}}
+        sensor_serial: E30753
+        other_heaters: [exfoliation_heater]
+        boost_voltage: 27.0
+        hold_voltage_by_target: {155: 16.0}
+        source: v1
+        cite: {at: "common/hardware/defaults.py:14", check: "COM17"}
+        cite_sensor: {at: "common/hardware/defaults.py:30", check: "E30753"}
+        cite_hold: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_drop_down.py:55", check: "16.0"}
+      desk_camera_right:
+        driver: opencv_camera
+        index: 2
+        width: 1920
+        height: 1080
+        source: v1
+        cite: {at: "agents/lab_manager_agent/tools/cv/config.py:60", check: "default_idx = 0 if is_left else 2"}

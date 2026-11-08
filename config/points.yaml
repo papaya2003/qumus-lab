@@ -1,0 +1,83 @@
+# Named points: the only place where coordinates live. Actions say "go to point X"; the agent never
+# sends raw coordinates (contract rule [Q]).
+#
+# Frames: an arm point is in that arm's own G-code frame (what v1 sent). Stage/stamp points use the
+# axis names of the device (x, y, rail [, z]); `order` is the axis order v1 used.
+#
+# source: v1  -> copied from v1 (cite = file:line, check = text on that line). A starting guess only.
+#               In real mode the SafetyGate refuses go_to_point for a `source: v1` point.
+# source: measured -> measured on the lab PC at L3 (add `measured_by`, `date`). Only these may be
+#               driven to in real mode. In --demo every point may be used.
+#
+# v1 computed many arm points as "stage centre + offset"; the absolute numbers below are those sums
+# for v1's fixed stage centres (left (0, 256), right (10, 300); robot_arm_controller.py:115, :141).
+
+version: 1
+
+points:
+  arm_left:
+    park:              {xyz: [0, 220, 95],   source: v1, cite: {at: "common/hardware/robot_arm_controller.py:171", check: "X0 Y220 Z95"}}
+    stage_chip_place:  {xyz: [10, 256, 80],  approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:217", check: "sx + 10"}}
+    stage_chip_pick:   {xyz: [8, 256, 80],   approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:301", check: "sx + 8"}}
+    stage_carrier_place: {xyz: [0, 229, 85], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:258", check: "sy - 27"}}
+    stage_carrier_pick:  {xyz: [0, 229, 82], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:366", check: "Z82"}}
+    massage_start:     {xyz: [-13, 298, 74], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:400", check: "mx - 13"}}
+    slot_S1:  {xyz: [200, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:14", check: "(200, 160)"}}
+    slot_S2:  {xyz: [240, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:15", check: "(240, 160)"}}
+    slot_S3:  {xyz: [280, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:16", check: "(280, 160)"}}
+    slot_S4:  {xyz: [320, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:17", check: "(320, 160)"}}
+    slot_S5:  {xyz: [200, 110, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:18", check: "(200, 110)"}}
+    slot_S6:  {xyz: [240, 110, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:19", check: "(240, 110)"}}
+    slot_S7:  {xyz: [280, 110, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:20", check: "(280, 110)"}}
+    slot_S8:  {xyz: [320, 110, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:21", check: "(320, 110)"}}
+    slot_S9:  {xyz: [200, 60, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:22", check: "(200, 60)"}}
+    slot_S10: {xyz: [240, 60, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:23", check: "(240, 60)"}}
+    slot_S11: {xyz: [280, 60, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:24", check: "(280, 60)"}}
+    slot_S12: {xyz: [320, 60, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:25", check: "(320, 60)"}}
+    slot_S13: {xyz: [240, 20, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:26", check: "(240, 20)"}}
+    slot_S14: {xyz: [280, 20, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:27", check: "(280, 20)"}}
+
+  arm_right:
+    park:              {xyz: [0, 260, 140],  source: v1, cite: {at: "common/hardware/robot_arm_controller.py:181", check: "X0 Y260 Z140"}}
+    stage_chip_place:  {xyz: [0, 300, 132],  approach_z: 140, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:238", check: "sx - 10"}}
+    stage_chip_pick:   {xyz: [0, 300, 130],  approach_z: 140, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:337", check: "Z130"}}
+    stamp_pick:        {xyz: [254, 190, 16], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:267", check: "X254 Y190 Z150"}}
+    stamp_via:         {xyz: [200, 275, 150], source: v1, cite: {at: "common/hardware/robot_arm_controller.py:272", check: "X200 Y275 Z150"}}
+    stamp_place:       {xyz: [42, 275, 134], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:276", check: "X42 Y275 Z150"}}
+    slot_S1:  {xyz: [-320, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:31", check: "(-320, 160)"}}
+    slot_S2:  {xyz: [-280, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:32", check: "(-280, 160)"}}
+    slot_S3:  {xyz: [-240, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:33", check: "(-240, 160)"}}
+    slot_S4:  {xyz: [-200, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:34", check: "(-200, 160)"}}
+    slot_S5:  {xyz: [-320, 110, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:35", check: "(-320, 110)"}}
+    slot_S6:  {xyz: [-280, 110, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:36", check: "(-280, 110)"}}
+    slot_S7:  {xyz: [-240, 110, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:37", check: "(-240, 110)"}}
+    slot_S8:  {xyz: [-200, 110, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:38", check: "(-200, 110)"}}
+    slot_S9:  {xyz: [-320, 60, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:39", check: "(-320, 60)"}}
+    slot_S10: {xyz: [-280, 60, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:40", check: "(-280, 60)"}}
+    slot_S11: {xyz: [-240, 60, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:41", check: "(-240, 60)"}}
+    slot_S12: {xyz: [-200, 60, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:42", check: "(-200, 60)"}}
+    slot_S13: {xyz: [-280, 20, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:43", check: "(-280, 20)"}}
+    slot_S14: {xyz: [-240, 20, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:44", check: "(-240, 20)"}}
+
+  sample_stage:
+    load:       {pos: {rail: 0.0, x: 0, y: 0}, order: [rail, x, y], source: v1,
+                 cite: {at: "agents/processing_agent/workflows/stacking/atom_flows/stage_atoms.py:134", check: "move_L_axis_to_mm(0.0"}}
+    microscope: {pos: {rail: 80.0, x: -12, y: 8}, order: [rail, x, y], source: v1,
+                 cite: {at: "agents/processing_agent/workflows/stacking/atom_flows/stage_atoms.py:151", check: "move_L_axis_to_mm(80.0"}}
+
+  stamp:
+    load:       {pos: {rail: 0.0, x: 6.0, y: 7.0, z: 6.5}, order: [rail, x, y, z], source: v1,
+                 cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_load_stamp.py:33", check: "L_TARGET = 0.0"}}
+    initialize: {pos: {rail: 120.0, z: 5.4}, order: [rail, z], source: v1,
+                 cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_initialize_stamp.py:30", check: "L_TARGET = 120.0"}}
+    remove:     {pos: {z: 6.5, rail: 160.0}, order: [z, rail], source: v1,
+                 cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_remove_stamp.py:24", check: "L_TARGET = 160.0"}}
+
+  tape_gantry:
+    # v1 apply_tape / exfoliate_tape (printer_controller.py:143-198): relative moves from the rest point.
+    apply_tape: {approach_dx: -140, approach_feed: 1000, arc: {end_x: -110, end_z: -160, centre_x: 80, centre_z: -170,
+                 clockwise: true, feed: 1000}, source: v1,
+                 cite: {at: "common/hardware/printer_controller.py:156", check: "G1 X-140 F1000"}}
+    peel_tape:  {arc: {end_x: 110, end_z: 160, centre_x: 190, centre_z: -10, clockwise: false},
+                 retreat_dx: 140, retreat_feed: 1000, source: v1,
+                 cite: {at: "common/hardware/printer_controller.py:188", check: "cx, cz = 190, -10"}}

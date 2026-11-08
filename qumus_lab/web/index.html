@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qumus lab bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <h1>Qumus lab bench</h1>
+  <span id="mode" class="mode">connecting</span>
+  <div class="control">
+    <label class="take"><input type="checkbox" id="take"> <span>Take control</span></label>
+    <span id="leaseinfo" class="muted">Reading only. Moves, switches and heating need control.</span>
+  </div>
+</header>
+
+<main id="bench" class="bench" aria-live="polite"></main>
+
+<section class="events" aria-label="Events">
+  <div class="events-head">
+    <h2>Events</h2>
+    <label class="muted"><input type="checkbox" id="evwarn"> Only warnings and errors</label>
+  </div>
+  <ol id="events"></ol>
+</section>
+
+<footer class="estop">
+  <button id="stopall" type="button">STOP ALL</button>
+  <p>Stops every axis of both modules and switches both heaters off. Works without control.</p>
+  <span id="stopresult" class="stopresult"></span>
+</footer>
+
+<template id="tpl-module">
+  <section class="module">
+    <div class="module-head">
+      <h2></h2>
+      <span class="port muted"></span>
+      <button type="button" class="readall">Read all</button>
+    </div>
+    <div class="status"></div>
+    <div class="goto">
+      <label>Go to point <select class="points"></select></label>
+      <button type="button" class="go">Go</button>
+      <span class="muted hint">Real mode: only measured points move.</span>
+    </div>
+    <div class="devices"></div>
+  </section>
+</template>
+<script src="app.js"></script>
+</body>
+</html>

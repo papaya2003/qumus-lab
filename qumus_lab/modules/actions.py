@@ -1,0 +1,263 @@
+"""Level-1/2 actions shared by both modules (contract v1 action names).
+
+Every action: gate check first, then generic driver operations, with a cancel check between steps.
+"""
+
+from __future__ import annotations
+
+from ..drivers.base import DriverError
+from ..safety.gate import Rejected
+from .base import Action, ActionContext, Module
+
+MOVERS = ("arm", "stage", "manipulator", "gantry", "focus")
+
+
+# ------------------------------------------------------------------------- reads
+def read_all(ctx: ActionContext, p: dict) -> dict:
+    out, errors = {}, {}
+    for dev_id, dev in ctx.module.devices.items():
+        if not dev.connected:
+            errors[dev_id] = dev.last_error or "not connected"
+            continue
+        try:
+            out[dev_id] = dev.read()
+        except DriverError as exc:
+            dev.last_error = str(exc)
+            errors[dev_id] = str(exc)
+    return {"devices": out, "errors": errors}
+
+
+def read_one(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"])
+    return {p["device"]: dev.read()}
+
+
+def home_query(ctx: ActionContext, p: dict) -> dict:
+    """Query only: which devices know their position. Never moves or homes anything."""
+    out = {}
+    for dev_id, dev in ctx.module.devices.items():
+        if dev.kind not in MOVERS + ("turret",):
+            continue
+        entry = {"connected": dev.connected}
+        if dev.connected:
+            try:
+                entry["position"] = dev.read()
+            except DriverError as exc:
+                entry["error"] = str(exc)
+        if dev.kind == "arm":
+            entry["position_trusted"] = getattr(dev, "pose_trusted", False)
+            entry["note"] = "v1 never homed the arms (no G28); trust depends on the controller keeping its origin"
+        elif dev.kind == "focus":
+            entry["position_trusted"] = False
+            entry["note"] = "software estimate only (v1 had no read-back)"
+        elif dev.kind == "turret":
+            entry["position_trusted"] = getattr(dev, "position", None) is not None
+            entry["note"] = "no position query in v1: last commanded position"
+        else:
+            entry["position_trusted"] = dev.connected
+        out[dev_id] = entry
+    return out
+
+
+def capture(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["camera"], ("camera",))
+    return dev.capture()
+
+
+# ------------------------------------------------------------------------- motion
+def _split_point(module: Module, qualified: str) -> tuple[str, str]:
+    if "." not in qualified:
+        raise Rejected(f"point must be '<device>.<point>', got {qualified!r}")
+    dev_id, name = qualified.split(".", 1)
+    if dev_id not in module.devices:
+        raise Rejected(f"point {qualified!r}: device {dev_id!r} is not in module {module.name}")
+    return dev_id, name
+
+
+def go_to_point(ctx: ActionContext, p: dict) -> dict:
+    dev_id, name = _split_point(ctx.module, p["point"])
+    pt = ctx.gate.check_point(dev_id, name)
+    dev = ctx.device(dev_id)
+    if dev.kind == "arm":
+        x, y, z = (float(v) for v in pt["xyz"])
+        feed = ctx.gate.arm_feed(dev_id)
+        ctx.gate.check_arm_z(dev_id, z)
+        if pt.get("approach_z") is not None:
+            az = float(pt["approach_z"])
+            ctx.gate.check_arm_z(dev_id, az)
+            ctx.check()
+            dev.move_to(x, y, az, feed)
+        ctx.check()
+        return dev.move_to(x, y, z, feed)
+    if dev.kind in ("stage", "manipulator"):
+        pos = pt["pos"]
+        order = pt.get("order") or list(pos)
+        for axis in order:
+            ctx.gate.check_axis_target(dev_id, axis, float(pos[axis]), for_point=True)
+        for axis in order:
+            ctx.check()
+            dev.move_to(axis, float(pos[axis]))
+        return dev.snapshot()
+    raise Rejected(f"{dev_id} has no go_to_point (kind {dev.kind})")
+
+
+def jog(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], MOVERS)
+    axis, mm = p["axis"], float(p["mm"])
+    amount = mm * 1000.0 if dev.kind == "focus" else mm
+    ctx.gate.check_jog(dev.kind, dev.id, axis, amount)
+    feed = float(ctx.gate.probe.get("jog_feed_mm_min", 300))
+    if dev.kind == "arm":
+        if axis not in ("x", "y", "z"):
+            raise Rejected("arm axis must be x, y or z")
+        pose = dev.read()
+        cur = pose[f"{axis}_mm"]
+        if cur is None:
+            raise Rejected("arm position unknown; cannot jog")
+        tgt = {"x": None, "y": None, "z": None}
+        tgt[axis] = cur + mm
+        if axis == "z":
+            ctx.gate.check_arm_z(dev.id, tgt["z"])
+        return dev.move_to(tgt["x"], tgt["y"], tgt["z"], feed)
+    if dev.kind == "stage":
+        cur = dev.read_axis_mm(axis)
+        ctx.gate.check_axis_target(dev.id, axis, cur + mm, for_point=False)
+        dev.move_by(axis, mm)
+        return dev.snapshot()
+    if dev.kind == "manipulator":
+        dev.read()
+        cur = dev.position(axis)
+        if cur is None:
+            raise Rejected(f"{dev.id}.{axis} position unknown")
+        ctx.gate.check_axis_target(dev.id, axis, cur + mm, for_point=False)
+        dev.move_to(axis, cur + mm)
+        return dev.snapshot()
+    if dev.kind == "gantry":
+        if axis not in ("x", "z"):
+            raise Rejected("gantry axis must be x or z")
+        dev.move(**{axis: mm}, feed=feed, relative=True)
+        return dev.read()
+    if dev.kind == "focus":
+        dev.move_by_um(amount)
+        return dev.snapshot()
+    raise Rejected(f"cannot jog {dev.id}")
+
+
+def arm_suction(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], ("arm",))
+    dev.set_vacuum(bool(p["on"]))
+    return dev.snapshot()
+
+
+def rotate_nozzle(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], ("arm",))
+    deg = float(p["deg"])
+    if not -180 <= deg <= 180:
+        raise Rejected("deg must be in [-180, 180]")
+    dev.rotate_nozzle(deg)
+    return dev.snapshot()
+
+
+# ------------------------------------------------------------------------- switches & heat
+def set_switch(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], ("switch",))
+    on = bool(p["on"])
+    auto_off = ctx.gate.switch_auto_off(True, p.get("auto_off_s")) if on else None
+    ctx.module.cancel_auto_off(dev.id)
+    dev.set(on)
+    if on and auto_off:
+        ctx.module.schedule_auto_off(dev, auto_off, ctx.log)
+    return dict(dev.snapshot(), auto_off_s=auto_off)
+
+
+def heat(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], ("heater",))
+    plan = ctx.gate.check_heat(dev, dev.id, float(p["target_c"]), float(p["timeout_s"]), p.get("volts"))
+    return dict(dev.heat(float(p["target_c"]), float(p["timeout_s"]), mode=plan["mode"], volts=plan["volts"]),
+                mode=plan["mode"])
+
+
+def heat_off(ctx: ActionContext, p: dict) -> dict:
+    dev = ctx.device(p["device"], ("heater",))
+    return dev.off("heat_off command")
+
+
+# ------------------------------------------------------------------------- prechecks (no I/O)
+def _dev(m: Module, dev_id: str):
+    dev = m.devices.get(dev_id)
+    if dev is None:
+        raise Rejected(f"unknown device {dev_id!r}")
+    return dev
+
+
+def pre_go_to_point(m: Module, p: dict) -> None:
+    dev_id, name = _split_point(m, p["point"])
+    pt = m.gate.check_point(dev_id, name)
+    if "pos" in pt:
+        for axis, val in pt["pos"].items():
+            m.gate.check_axis_target(dev_id, axis, float(val), for_point=True)
+
+
+def pre_jog(m: Module, p: dict) -> None:
+    dev = _dev(m, p["device"])
+    amount = float(p["mm"]) * (1000.0 if dev.kind == "focus" else 1.0)
+    m.gate.check_jog(dev.kind, dev.id, p["axis"], amount)
+
+
+def pre_set_switch(m: Module, p: dict) -> None:
+    if p.get("on"):
+        m.gate.switch_auto_off(True, p.get("auto_off_s"))
+
+
+def pre_heat(m: Module, p: dict) -> None:
+    dev = _dev(m, p["device"])
+    m.gate.check_heat(dev, dev.id, float(p["target_c"]), float(p["timeout_s"]), p.get("volts"))
+    psu = getattr(dev, "psu", None)
+    if psu is not None and psu.owner not in (None, dev.id):
+        raise Rejected(f"power supply is driving {psu.owner}; turn it off first", 409)
+
+
+# ------------------------------------------------------------------------- registration
+def register_common(m: Module) -> None:
+    devs = sorted(m.devices)
+    points = [f"{d}.{n}" for d in devs for n in m.points_for(d)]
+    of = lambda kinds: sorted(m.device_ids(kinds))  # noqa: E731
+    m.add(Action("read_all", read_all, any_client=True, concurrent=True,
+                 description="Query every device of this module once (no motion)."))
+    m.add(Action("read", read_one, {"device": {"type": "string", "enum": devs}}, ("device",),
+                 any_client=True, concurrent=True, description="Query one device."))
+    m.add(Action("home_query", home_query, any_client=True, concurrent=True,
+                 description="Report which devices know their position. Query only: never homes or moves."))
+    m.add(Action("go_to_point", go_to_point, {"point": {"type": "string", "enum": points}}, ("point",), motion=True, precheck=pre_go_to_point,
+                 description="Move a device to a named point from config/points.yaml (real mode: measured points only)."))
+    m.add(Action("jog", jog, {"device": {"type": "string", "enum": of(MOVERS)},
+                              "axis": {"type": "string"}, "mm": {"type": "number"}},
+                 ("device", "axis", "mm"), motion=True, local_only=True, precheck=pre_jog,
+                 description="Small relative move (caps: arm/stage/gantry 0.5 mm, stamp 0.1 mm, focus 0.05 mm)."))
+    if of(("arm",)):
+        m.add(Action("arm_suction", arm_suction, {"device": {"type": "string", "enum": of(("arm",))},
+                                                  "on": {"type": "boolean"}}, ("device", "on"),
+                     description="Arm nozzle suction on/off (v1 M888 P2 + M1000/M1003)."))
+        m.add(Action("rotate_nozzle", rotate_nozzle, {"device": {"type": "string", "enum": of(("arm",))},
+                                                      "deg": {"type": "number", "minimum": -180, "maximum": 180}},
+                     ("device", "deg"), motion=True, description="Rotate the arm nozzle (v1 M2101 R<deg>)."))
+    if of(("switch",)):
+        m.add(Action("set_switch", set_switch, {"device": {"type": "string", "enum": of(("switch",))},
+                                                "on": {"type": "boolean"},
+                                                "auto_off_s": {"type": "number", "minimum": 0}},
+                     ("device", "on"), local_only=True, precheck=pre_set_switch,
+                     description="Relay on/off; 'on' turns itself off after auto_off_s (<= 10 s)."))
+    if of(("heater",)):
+        m.add(Action("heat", heat, {"device": {"type": "string", "enum": of(("heater",))},
+                                    "target_c": {"type": "number"}, "timeout_s": {"type": "number"},
+                                    "volts": {"type": "number"}},
+                     ("device", "target_c", "timeout_s"), precheck=pre_heat,
+                     description="Heat with a mandatory timeout. Unmeasured heaters in real mode: <= 40 C, <= 6.5 V."))
+        m.add(Action("heat_off", heat_off, {"device": {"type": "string", "enum": of(("heater",))}}, ("device",),
+                     any_client=True, concurrent=True, description="Heater output and relay off. Any client."))
+    if of(("camera",)):
+        m.add(Action("capture", capture, {"camera": {"type": "string", "enum": of(("camera",))}}, ("camera",),
+                     any_client=True, concurrent=True, description="Take one picture; returns its image_id."))
+
+
+__all__ = ["register_common", "MOVERS"]
