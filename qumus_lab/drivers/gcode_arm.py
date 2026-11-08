@@ -30,7 +30,7 @@ NO_OK_PREFIXES = ("M888",)  # v1 robot_arm_controller.py:15
 class GcodeArm(Device):
     kind = "arm"
     fields = {"x_mm": "mm", "y_mm": "mm", "z_mm": "mm", "nozzle_deg": "deg", "vacuum_on": "bool",
-              "pose_trusted": "bool"}
+              "pose_trusted": "bool", "moving": "bool"}
 
     def __init__(self, device_id: str, cfg: dict, serial_factory):
         super().__init__(device_id, cfg)
@@ -46,6 +46,7 @@ class GcodeArm(Device):
         self.pose_trusted = False
         self.boot_banner = ""
         self._modes_sent = False
+        self.moving = False
 
     # --- link ----------------------------------------------------------
     def connect(self) -> None:
@@ -134,7 +135,8 @@ class GcodeArm(Device):
 
     def snapshot(self) -> dict:
         return {"x_mm": self.pose["x"], "y_mm": self.pose["y"], "z_mm": self.pose["z"],
-                "nozzle_deg": self.nozzle_deg, "vacuum_on": self.vacuum_on, "pose_trusted": self.pose_trusted}
+                "nozzle_deg": self.nozzle_deg, "vacuum_on": self.vacuum_on, "pose_trusted": self.pose_trusted,
+                "moving": self.moving}
 
     # --- generic operations ---------------------------------------------
     def _ensure_modes(self) -> None:
@@ -156,9 +158,13 @@ class GcodeArm(Device):
         with self._lock:
             self._ensure_modes()
             dist = self._distance(x, y, z)
-            self.send(" ".join(parts))
-            if wait:
-                self.finish_moves(expected_s=60.0 * dist / float(feed) if dist is not None else None)
+            self.moving = True
+            try:
+                self.send(" ".join(parts))
+                if wait:
+                    self.finish_moves(expected_s=60.0 * dist / float(feed) if dist is not None else None)
+            finally:
+                self.moving = False
         return self.snapshot()
 
     def _distance(self, x, y, z) -> float | None:
@@ -206,7 +212,7 @@ class GcodeArm(Device):
         self.nozzle_deg = float(int(deg))
 
     def stop(self) -> bool | None:
-        if not self.connected:
+        if not self.connected or not self.moving:
             return None
         if not self.stop_gcode:
             return False  # v1 had no stop command: cannot confirm (docs/open-questions.md)
