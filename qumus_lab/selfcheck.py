@@ -97,8 +97,11 @@ def check_config(config_dir: Path | None, runs_dir: Path | None):
     try:
         from .launcher import build_stack
 
-        stack = build_stack(cfg, demo=False, connect=False, use_store=False)
-        stack.close()
+        with tempfile.TemporaryDirectory(prefix="qumus-selfcheck-", ignore_cleanup_errors=True) as tmp:
+            dry = cfg.copy()
+            dry.runs_dir = Path(tmp)
+            stack = build_stack(dry, demo=False, connect=False, use_store=False)
+            stack.close()
         out.append(Result("real-mode build", PASS, "both services build from the config (no port opened)"))
     except Exception as exc:  # noqa: BLE001
         out.append(Result("real-mode build", FAIL, f"{type(exc).__name__}: {exc}"))

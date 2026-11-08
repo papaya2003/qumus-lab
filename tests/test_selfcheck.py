@@ -13,6 +13,7 @@ def test_selfcheck_passes_here_and_writes_a_report(tmp_path, capsys):
     assert "[FAIL]" not in out
     for line in ("demo debug page", "demo exfoliation", "demo stacking", "real-mode build", "runs folder"):
         assert f"[PASS] {line}" in out
+    assert sorted(p.name for p in runs.iterdir()) == ["selfcheck"]  # the lab's records stay untouched
     report = next((runs / "selfcheck").glob("*-selfcheck.json"))
     data = json.loads(report.read_text(encoding="utf-8"))
     assert {r["status"] for r in data["results"]} <= {"PASS", "WARN", "SKIP"}
