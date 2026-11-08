@@ -17,7 +17,7 @@ import threading
 import time
 
 from ..transport.serial_port import PortSpec
-from .base import Device, NoReply, OutcomeUnknown, Refused
+from .base import Device, Interrupted, NoReply, OutcomeUnknown, Refused
 
 
 class KZ100Link:
@@ -63,11 +63,18 @@ class KZ100Link:
     def read_status(self, content: str) -> str:
         return self.command(f"U{content};", 1).decode("ascii", errors="ignore")
 
-    def move_steps(self, channel: str, steps: int) -> None:
-        try:
-            self.command(f"D{channel}{int(steps)};")
-        except NoReply as exc:
-            raise OutcomeUnknown(str(exc)) from exc
+    def move_steps(self, channel: str, steps: int, abort=None) -> None:
+        """``abort()`` is checked under the port lock, so a stop (PA; also takes the lock) either comes
+        after this move and stops it, or comes first and this move is never sent."""
+        if self.ser is None:
+            raise NoReply(f"KZ-100 {self.spec.port} not open")
+        with self.lock:
+            if abort is not None and abort():
+                raise Interrupted(f"KZ-100 {self.spec.port}: stop requested; D{channel} not sent")
+            try:
+                self._write_command(f"D{channel}{int(steps)};")
+            except NoReply as exc:
+                raise OutcomeUnknown(str(exc)) from exc
 
     def set_max_speed(self, channel: str, speed: int) -> None:
         if not 0 <= int(speed) <= 16383:
@@ -95,7 +102,6 @@ class KZ100Stage(Device):
         self.pos_mm: dict[str, float | None] = {k: None for k in self.axes}
         self.moving = False
         self.fields = {f"{k}_mm": "mm" for k in self.axes}
-        self._stop_evt = threading.Event()
 
     def connect(self) -> None:
         self.link.open()
@@ -154,10 +160,13 @@ class KZ100Stage(Device):
 
     def _move_steps(self, axis: str, delta: int, wait: bool) -> float:
         a = self._ax(axis)
-        self._stop_evt.clear()
         if delta != 0:
             self.moving = True
-            self.link.move_steps(a["channel"], delta)
+            try:
+                self.link.move_steps(a["channel"], delta, abort=self._stop_evt.is_set)
+            except Interrupted:
+                self.moving = False
+                raise
         if not wait:
             return float("nan")
         self.wait_settled(axis)

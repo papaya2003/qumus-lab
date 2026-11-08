@@ -75,7 +75,9 @@ class TmclFocus(Device):
         if abs(float(dist_um)) > self.max_chunk_um:
             raise Refused(f"{self.id}: {dist_um} um is above the {self.max_chunk_um} um single-move limit")
         steps = um_to_microsteps(dist_um, self.steps_per_um)
-        self._send(tmcl_frame(self.address, 4, 1, self.motor, steps))
+        with self._lock:  # the stop frame takes the same lock
+            self.check_not_stopped()
+            self._send(tmcl_frame(self.address, 4, 1, self.motor, steps))
         self.z_um += float(dist_um)
         return self.z_um
 
@@ -93,6 +95,7 @@ class TmclFocus(Device):
     def stop(self) -> bool | None:
         if not self.connected:
             return None
+        self._stop_evt.set()
         try:
             self._send(tmcl_frame(self.address, 3, 1, self.motor, 0))
             return True

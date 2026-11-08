@@ -23,7 +23,11 @@ one independent service.
 - **Unknown outcome locks.** If a command can not tell whether the instrument did what was asked
   (no reply, timeout during motion, a stop that can not be confirmed), the module is `locked` with a
   `fault`, the command is never retried, and every motion/switch/heat command is refused with `409`
-  until a person unlocks it on the lab PC.
+  until a person unlocks it on the lab PC. `heat_off` is still accepted while locked [Q]. A heater off
+  that can not be confirmed also locks (`fault.code` `heat_off_unconfirmed`).
+- **A stop is not lost.** `stop` latches in every motion driver of the module until the next command is
+  accepted; a driver refuses to send a motion command while the latch is set. An action interrupted
+  this way finishes with `result: stopped`.
 - **Client name.** Every POST carries `X-Qumus-Client: <name>` (1 to 128 printable ASCII).
 - **JSON only.** POST bodies are JSON objects with `Content-Type: application/json`.
 
@@ -94,7 +98,7 @@ Both modules:
 | `rotate_nozzle` | `device, deg` | M | arm nozzle rotation (v1 M2101) |
 | `set_switch` | `device, on, auto_off_s?` | L | relay on/off; `on` turns itself off after <= 10 s |
 | `heat` | `device, target_c, timeout_s, volts?` | | heat with a mandatory timeout; unmeasured heaters in real mode: <= 40 C at <= 6.5 V |
-| `heat_off` | `device` | A | heater output and relay off |
+| `heat_off` | `device` | A | heater output and relay off; also accepted while the module is locked |
 
 Zones (both modules; the middle board is shared by the two arms, see [lab-state.md](lab-state.md)):
 
@@ -122,7 +126,9 @@ These are additions beyond the shared contract, kept so that the shared spec can
   uses it).
 - `GET images/<image_id>` returns a captured picture, so a client does not need file access.
 - `unlock` is a `local_only` endpoint: only a person on the lab PC can clear a lock.
-- `describe` adds `module`, and each command adds `motion`, `any_client`, `local_only`, `description`.
+- `heat_off` is accepted while the module is locked (switching heat off must always be possible).
+- `describe` adds `module`, and each command adds `motion`, `any_client`, `local_only`,
+  `allowed_when_locked`, `description`.
   `describe.zones` is the list of zone names (as the shared contract), and `state.zones` adds each
   zone's holder.
 - Each finished command is written to the device table of qumus.db before `last_command` shows it.

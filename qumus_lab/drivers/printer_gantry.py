@@ -21,6 +21,9 @@ from .base import Device, FirmwareError, NoReply, OutcomeUnknown, Refused, fmt_n
 POS_RE = re.compile(r"X:([+-]?\d+\.?\d*)\s+Y:([+-]?\d+\.?\d*)\s+Z:([+-]?\d+\.?\d*)")
 
 
+MOTION_GCODES = ("G0", "G1", "G2", "G3", "G28")
+
+
 def arc_segments(x0, z0, x1, z1, cx, cz, clockwise: bool, segments: int = 100) -> list[tuple[float, float]]:
     """Relative (dx, dz) steps of an arc from (x0, z0) to (x1, z1) around (cx, cz). Same maths as v1."""
     def angle(x, z):
@@ -74,6 +77,8 @@ class PrinterGantry(Device):
     def send(self, cmd: str, *, actuating: bool = True, timeout_s: float | None = None) -> None:
         self.require_connected()
         with self._lock:
+            if cmd.split(" ", 1)[0].upper() in MOTION_GCODES:
+                self.check_not_stopped()  # after M410 the host must not feed the next arc segment
             self.ser.reset_input_buffer()
             self.ser.write((cmd + "\n").encode())
             deadline = time.monotonic() + (timeout_s or self.reply_timeout_s)
@@ -175,6 +180,7 @@ class PrinterGantry(Device):
     def stop(self) -> bool | None:
         if not self.connected:
             return None
+        self._stop_evt.set()
         try:
             for line in self.stop_gcode:
                 self.ser.write((line + "\n").encode())

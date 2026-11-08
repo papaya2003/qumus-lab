@@ -56,11 +56,17 @@ update `config/` (and this page) with what the bench shows.
 17. **Transfer heater** has only one v1 hold point (155 C at 16.0 V). Other targets have no hold
     voltage until measured.
 18. **Crash while heating.** If the PC or Python dies while the supply is on, nothing in software can
-    switch it off. A hardware timer or thermal fuse on the supply line is recommended.
+    switch it off until the next start (at connect, a supply that is on with no heater driving it is
+    switched off). A hardware timer or thermal fuse on the supply line is still recommended. Closing the
+    console window or `taskkill` is a crash in this sense; only Ctrl+C runs safe_state.
 19. **Orphan timeout** is 600 s: a heater keeps its own timeout while the agent reconnects, but with no
     lease holder for 10 minutes it is switched off. Is 10 minutes right?
 
 ## Software and repo
+
+Found in the 11-08 safety self-review and not changed (see `tests/test_fault_injection.py` for what was):
+- `focus_by` sends the TMCL move and returns at once, so a lease expiry during a long focus move does not
+  stop it (the 50 um cap keeps it short). Waiting for the move needs the GAP position query (item 9).
 
 20. **Both modules in one process** (shared supply on COM8, Windows COM ports are exclusive). Each
     module still has its own port, lease and lock. OK, or should the supply move to its own service?
