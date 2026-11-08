@@ -85,6 +85,8 @@ tests/             byte-for-byte v1 comparison, contract behaviour, probe, confi
 docs/              architecture, contract, v1 mapping, open questions, debug page design
 ```
 
+**Lab PC step by step (Chinese): [docs/l1-l2-guide.zh.md](docs/l1-l2-guide.zh.md).**
+
 Docs: [architecture](docs/architecture.md), [contract](docs/contract.md),
 [v1 mapping and hazards](docs/v1-mapping.md), [open questions](docs/open-questions.md),
 [debug page design](docs/debug-page-design.md).
