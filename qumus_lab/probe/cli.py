@@ -2,7 +2,8 @@
 
     qumus-probe ports                       L1: COM ports seen by Windows vs config/devices.yaml (opens nothing)
     qumus-probe read all|<device>           L1: connect (query only) and read
-    qumus-probe l1                          L1: ports + read every device of both modules, one at a time
+    qumus-probe l1                          L1: ports + read every device of both modules + one picture per camera
+    qumus-probe capture <camera>            L1: one picture (moves nothing); prints the file path
     qumus-probe jog <device> <axis> <mm>    L2: one small move (caps), asks Enter first
     qumus-probe switch <device> on|off      L2: relay, 'on' turns itself off after <= 10 s
     qumus-probe heat <device> <target_c> --timeout S   L2: first heat <= 40 C, <= 6.5 V
@@ -120,7 +121,8 @@ class Probe:
                 if lc.get("output") is not None:
                     self.out("        " + json.dumps(lc["output"], default=str)[:400])
                 if svc.locked:
-                    self.out(f"  !!! {svc.name} is LOCKED: {svc.fault}. Check the instrument, then unlock on the debug page.")
+                    self.out(f"  !!! {svc.name} is LOCKED: {svc.fault}. The result is unknown: look at the instrument "
+                             "before anything else. The lock ends with this probe run.")
                 return lc
             time.sleep(0.05)
         self.out("  [TIMEOUT] no result; treat as unknown outcome")
@@ -129,17 +131,21 @@ class Probe:
 
     # ------------------------------------------------------------------ L1
     def ports(self) -> list[dict]:
-        seen = {p["port"].upper(): p for p in list_serial_ports()}
+        if self.demo:  # the simulated world plays the part of Windows' port list
+            seen = {p.upper(): {"port": p, "description": "simulated"}
+                    for p in self.stack.lab.backends.world.emulators}
+        else:
+            seen = {p["port"].upper(): p for p in list_serial_ports()}
         rows = []
         self.out("L1 ports: config/devices.yaml vs ports Windows reports (nothing is opened)")
         for dev_id, port, what in self.config.configured_ports():
             hit = seen.get(port.upper())
             rows.append({"device": dev_id, "port": port, "present": bool(hit), "description": hit and hit["description"]})
             mark = "present" if hit else "MISSING"
-            self.out(f"  {dev_id:22s} {what:10s} {port:7s} {mark:8s} {hit['description'] if hit else ''}")
+            self.out(f"  {dev_id:26s} {what:14s} {port:7s} {mark:8s} {hit['description'] if hit else ''}")
         extra = sorted(set(seen) - {r["port"].upper() for r in rows})
         for port in extra:
-            self.out(f"  {'(not in config)':22s} {'':10s} {port:7s} {'':8s} {seen[port]['description']}")
+            self.out(f"  {'(not in config)':26s} {'':14s} {port:7s} {'':8s} {seen[port]['description']}")
         self.out("  Kinesis serials, cameras and the Dracal exe are checked by `read`.")
         self.log.write("ports", rows=rows, unconfigured=extra)
         return rows
@@ -173,9 +179,32 @@ class Probe:
         self.out(f"L1 read: {ok}/{len(results)} devices answered")
         return results
 
+    def capture(self, camera: str) -> dict:
+        """One picture (moves nothing). Prints where the file is, so a person can see which camera it is."""
+        if not self.connect(camera):
+            return {"result": "not_connected"}
+        lc = self.run(camera, {"action": "capture", "camera": camera})
+        out = lc.get("output") or {}
+        if lc.get("result") == "ok" and out.get("image_id"):
+            path = self.config.runs_dir / "captures" / f"{out['image_id']}.{out.get('ext', 'jpg')}"
+            self.out(f"        picture: {path}")
+            lc = {**lc, "path": str(path)}
+        return lc
+
+    def cameras(self) -> list[str]:
+        return [d for d in self.config.all_device_ids()
+                if self.config.module_of(d) in self.stack.services and self.stack.lab.devices[d].kind == "camera"]
+
     def l1(self) -> dict:
         self.ports()
         res = self.read("all")
+        self.out("L1 pictures (one per camera; open them to check which camera is which)")
+        for cam in self.cameras():
+            self.out(f"- {cam}")
+            lc = self.capture(cam)
+            if cam in res:
+                res[cam]["picture"] = lc.get("path")
+                res[cam]["ok"] = res[cam]["ok"] and lc.get("result") == "ok"
         path = self.config.runs_dir / "probe" / f"{time.strftime('%Y%m%d-%H%M%S')}-l1-report.json"
         path.write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
         self.out(f"L1 report: {path}")
@@ -283,6 +312,12 @@ class Probe:
                 else:
                     r = self.run(dev, {"action": "capture", "camera": dev})
             done.append({"step": text, "result": r.get("result")})
+            locked = [n for n, svc in self.stack.services.items() if svc.locked]
+            if locked:
+                self.out(f"  L2 walk stopped: {', '.join(locked)} locked (unknown outcome). Check that instrument, "
+                         "write down what happened, then start the walk again.")
+                self.safe_state("lock during L2")
+                break
             if confirm and self.ask("  did the instrument do exactly that? [y/n] ").strip().lower() != "y":
                 self.log.write("l2_observation", step=text, observed="NOT as expected")
                 self.out("  noted as NOT as expected (see the probe log)")
@@ -300,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("read")
     r.add_argument("device", help="device id or 'all'")
     sub.add_parser("l1")
+    c = sub.add_parser("capture")
+    c.add_argument("camera")
     j = sub.add_parser("jog")
     j.add_argument("device")
     j.add_argument("axis")
@@ -328,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
             probe.read(args.device)
         elif args.cmd == "l1":
             probe.l1()
+        elif args.cmd == "capture":
+            probe.capture(args.camera)
         elif args.cmd == "jog":
             probe.jog(args.device, args.axis, args.mm)
         elif args.cmd == "switch":
