@@ -52,7 +52,8 @@ class Heater(Device):
 
     # lifecycle -------------------------------------------------------------
     def connect(self) -> None:
-        for dev in (self.relay, self.psu, self.thermo):
+        # The other heater's relay is needed too: heat() switches it off before the shared supply goes on.
+        for dev in (self.relay, self.psu, self.thermo, *self.other_relays):
             if not dev.connected:
                 dev.connect()
         self.connected = True

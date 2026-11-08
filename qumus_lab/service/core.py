@@ -294,8 +294,14 @@ class ContractService:
     def safe_state(self, reason: str = "safe_state") -> dict:
         """Stop axes and heat off (probe Ctrl+C, launcher shutdown)."""
         out = self.stop(wait_s=2.0, reason=reason, heat_off=True)
-        for t in list(self.module._switch_timers.values()):
-            t.cancel()
+        for dev_id in list(self.module._switch_timers):
+            self.module.cancel_auto_off(dev_id)
+            dev = self.module.devices.get(dev_id)
+            try:
+                if dev is not None and dev.connected:
+                    dev.set(False)  # a probe/debug switch never stays on after safe_state
+            except Exception as exc:  # noqa: BLE001
+                self.emit("switch off failed in safe_state", {"device": dev_id, "error": str(exc)}, "error")
         return out
 
     # ------------------------------------------------------------------ watchdog
