@@ -12,6 +12,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_DIR = REPO_ROOT / "config"
 DEFAULT_RUNS_DIR = REPO_ROOT / "runs" / "real-lab"
+DEFAULT_DEMO_RUNS_DIR = REPO_ROOT / "runs" / "demo"  # --demo never writes into the real lab's records
 
 
 def load_yaml(path: Path) -> dict:
@@ -70,9 +71,11 @@ class LabConfig:
                          self.config_dir, self.runs_dir)
 
 
-def load_config(config_dir: str | Path | None = None, runs_dir: str | Path | None = None) -> LabConfig:
+def load_config(config_dir: str | Path | None = None, runs_dir: str | Path | None = None, *,
+                demo: bool = False) -> LabConfig:
+    """``runs_dir`` default: runs/real-lab, or runs/demo for --demo (QUMUS_LAB_RUNS overrides both)."""
     cdir = Path(config_dir or os.environ.get("QUMUS_LAB_CONFIG") or DEFAULT_CONFIG_DIR)
-    rdir = Path(runs_dir or os.environ.get("QUMUS_LAB_RUNS") or DEFAULT_RUNS_DIR)
+    rdir = Path(runs_dir or os.environ.get("QUMUS_LAB_RUNS") or (DEFAULT_DEMO_RUNS_DIR if demo else DEFAULT_RUNS_DIR))
     return LabConfig(
         devices=load_yaml(cdir / "devices.yaml"),
         points=load_yaml(cdir / "points.yaml"),

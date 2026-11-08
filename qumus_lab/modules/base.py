@@ -18,6 +18,7 @@ from typing import Any
 from ..config import LabConfig
 from ..drivers.base import Device
 from ..safety.gate import GateContext, Rejected, SafetyGate
+from ..safety.zones import ZoneRegistry
 
 
 class Cancelled(Exception):
@@ -107,8 +108,9 @@ def _check_type(action: str, key: str, val: Any, spec: dict) -> Any:
 
 class Module:
     def __init__(self, name: str, config: LabConfig, devices: dict[str, Device], demo: bool,
-                 shared: dict[str, Device] | None = None):
+                 shared: dict[str, Device] | None = None, zones: ZoneRegistry | None = None):
         self.name = name
+        self.zones = zones
         self.config = config
         self.devices = devices
         self.shared = shared or {}
@@ -122,6 +124,9 @@ class Module:
 
     def device_ids(self, kinds: tuple[str, ...] | None = None) -> list[str]:
         return [k for k, d in self.devices.items() if kinds is None or d.kind in kinds]
+
+    def zone_names(self) -> list[str]:
+        return self.zones.zones_for_devices(self.devices) if self.zones is not None else []
 
     def points_for(self, device_id: str) -> list[str]:
         return sorted(self.config.points.get("points", {}).get(device_id, {}))

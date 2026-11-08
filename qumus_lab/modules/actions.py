@@ -75,6 +75,22 @@ def _split_point(module: Module, qualified: str) -> tuple[str, str]:
 
 
 def go_to_point(ctx: ActionContext, p: dict) -> dict:
+    dev_id, _ = _split_point(ctx.module, p["point"])
+    zones = ctx.module.zones
+    if zones is None:
+        return _go_to_point(ctx, p)
+    zones.check_enter(dev_id, p["point"])
+    zones.move_started(dev_id, p["point"])
+    ok = False
+    try:
+        out = _go_to_point(ctx, p)
+        ok = True
+        return out
+    finally:
+        zones.move_finished(dev_id, p["point"], ok)
+
+
+def _go_to_point(ctx: ActionContext, p: dict) -> dict:
     dev_id, name = _split_point(ctx.module, p["point"])
     pt = ctx.gate.check_point(dev_id, name)
     dev = ctx.device(dev_id)
@@ -196,6 +212,29 @@ def pre_go_to_point(m: Module, p: dict) -> None:
     if "pos" in pt:
         for axis, val in pt["pos"].items():
             m.gate.check_axis_target(dev_id, axis, float(val), for_point=True)
+    if m.zones is not None:
+        m.zones.check_enter(dev_id, p["point"])
+
+
+# ------------------------------------------------------------------------- zones (middle board)
+def zone_acquire(ctx: ActionContext, p: dict) -> dict:
+    return {p["zone"]: ctx.module.zones.acquire(p["zone"], p["device"])}
+
+
+def zone_release(ctx: ActionContext, p: dict) -> dict:
+    return {p["zone"]: ctx.module.zones.release(p["zone"], p["device"])}
+
+
+def zone_clear(ctx: ActionContext, p: dict) -> dict:
+    return {p["zone"]: ctx.module.zones.clear(p["zone"], ctx.gate_ctx.client)}
+
+
+def pre_zone_acquire(m: Module, p: dict) -> None:
+    m.zones.check_acquire(p["zone"], p["device"])
+
+
+def pre_zone_release(m: Module, p: dict) -> None:
+    m.zones.check_release(p["zone"], p["device"])
 
 
 def pre_jog(m: Module, p: dict) -> None:
@@ -255,6 +294,19 @@ def register_common(m: Module) -> None:
                      description="Heat with a mandatory timeout. Unmeasured heaters in real mode: <= 40 C, <= 6.5 V."))
         m.add(Action("heat_off", heat_off, {"device": {"type": "string", "enum": of(("heater",))}}, ("device",),
                      any_client=True, concurrent=True, description="Heater output and relay off. Any client."))
+    zone_names = m.zone_names()
+    if zone_names:
+        zone_devs = sorted(d for d in m.devices if any(d in m.zones.zones[z]["devices"] for z in zone_names))
+        zp = {"zone": {"type": "string", "enum": zone_names}, "device": {"type": "string", "enum": zone_devs}}
+        m.add(Action("zone_acquire", zone_acquire, zp, ("zone", "device"), concurrent=True, precheck=pre_zone_acquire,
+                     description="Take a shared zone (middle board) for an arm; 409 if the other arm holds it. "
+                                 "go_to_point into the zone needs it."))
+        m.add(Action("zone_release", zone_release, zp, ("zone", "device"), concurrent=True, precheck=pre_zone_release,
+                     description="Give the zone back; refused while the arm is (or may be) inside. A move to a "
+                                 "point outside releases it automatically."))
+        m.add(Action("zone_clear", zone_clear, {"zone": zp["zone"]}, ("zone",), concurrent=True, local_only=True,
+                     any_client=True,
+                     description="A person checked the bench: no arm is in the zone. Clears holder and inside."))
     if of(("camera",)):
         m.add(Action("capture", capture, {"camera": {"type": "string", "enum": of(("camera",))}}, ("camera",),
                      any_client=True, concurrent=True, description="Take one picture; returns its image_id."))

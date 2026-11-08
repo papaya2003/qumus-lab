@@ -97,7 +97,7 @@ def check_config(config_dir: Path | None, runs_dir: Path | None):
     try:
         from .launcher import build_stack
 
-        stack = build_stack(cfg, demo=False, connect=False)
+        stack = build_stack(cfg, demo=False, connect=False, use_store=False)
         stack.close()
         out.append(Result("real-mode build", PASS, "both services build from the config (no port opened)"))
     except Exception as exc:  # noqa: BLE001

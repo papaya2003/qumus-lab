@@ -20,6 +20,7 @@ from pathlib import Path
 from ..drivers.base import DriverError, OutcomeUnknown, Refused
 from ..modules.base import ActionContext, Cancelled, Module
 from ..safety.gate import GateContext, Rejected
+from ..state.store import LabStore
 
 CONTRACT = 1
 LEASE_S = 3.0
@@ -41,8 +42,10 @@ class Lease:
 
 class ContractService:
     def __init__(self, module: Module, *, version: str = "0.1.0", journal_dir: Path | None = None,
-                 lease_s: float = LEASE_S):
+                 lease_s: float = LEASE_S, store: LabStore | None = None):
         self.module = module
+        self.store = store
+        self._heater_written: dict[str, float] = {}
         self.name = module.name
         self.version = version
         self.lease_s = lease_s
@@ -80,7 +83,41 @@ class ContractService:
                     fh.write(json.dumps(dict(ev, service=self.name), default=str) + "\n")
             except OSError:
                 pass
+        if self.store is not None:
+            try:
+                self.store.add_event(self.name, level, message, ev["fields"], ev["ts_unix"])
+            except Exception:  # noqa: BLE001 - the in-memory journal still has it
+                pass
         return ev
+
+    # ------------------------------------------------------------------ device table (qumus.db)
+    def touched_devices(self, params: dict) -> list[str]:
+        """Devices a command names (device, camera, point); all of the module's devices otherwise."""
+        ids = [params[k] for k in ("device", "camera") if params.get(k) in self.module.devices]
+        point = params.get("point")
+        if isinstance(point, str) and point.split(".", 1)[0] in self.module.devices:
+            ids.append(point.split(".", 1)[0])
+        return ids or list(self.module.devices)
+
+    def record_devices(self, device_ids: list[str], *, initial: bool = False) -> None:
+        """Write the touched devices' last readings to the device table. Values only come from the drivers
+        (null = not known). ``initial``: only kind / module / online, keeping the stored readings."""
+        if self.store is None:
+            return
+        try:
+            for dev_id in device_ids:
+                dev = self.module.devices[dev_id]
+                online = bool(dev.connected and not dev.last_error)
+                state = None if initial else _jsonable(dev.snapshot())
+                self.store.upsert_device(dev_id, dev.kind, module=self.name, state=state,
+                                         read_at=dev.last_read_unix, online=online)
+                psu = getattr(dev, "psu", None)
+                if psu is not None:  # the shared supply follows the heater that uses it
+                    self.store.upsert_device(psu.id, psu.kind, module="shared",
+                                             state=None if initial else _jsonable(psu.snapshot()),
+                                             read_at=psu.last_read_unix, online=bool(psu.connected))
+        except Exception as exc:  # noqa: BLE001 - never fail a command because of the state file
+            self.emit("state table write failed", {"error": f"{type(exc).__name__}: {exc}"}, "warning")
 
     def get_events(self, since: int = 0) -> dict:
         with self.lock:
@@ -94,7 +131,7 @@ class ContractService:
             "service": f"qumus-lab.{self.name}", "version": self.version, "contract": CONTRACT, "module": self.name,
             "demo": self.module.demo, "client_header": CLIENT_HEADER, "lease_seconds": self.lease_s,
             "on_lease_expiry": "stop_motion (heaters keep their own timeout and orphan timeout)",
-            "zones": [], "devices": self.module.describe_devices(),
+            "zones": self.module.zone_names(), "devices": self.module.describe_devices(),
             "commands": {n: a.describe() for n, a in self.module.actions.items()},
         }
 
@@ -118,6 +155,7 @@ class ContractService:
                 "busy": self.busy_command is not None, "busy_action": (self.busy_command or {}).get("action"),
                 "locked": self.locked, "fault": self.fault, "lease": self.lease_view(),
                 "last_command": self.last_command, "devices": devices,
+                "zones": self.module.zones.view(self.module.zone_names()) if self.module.zones else {},
             }
 
     # ------------------------------------------------------------------ lease
@@ -230,6 +268,7 @@ class ContractService:
                 self._lock_service("internal_error", message, command_id)
         if result == "ok" and cancel.is_set() and action.motion:
             result, message = "stopped", "stop requested during the action"
+        self.record_devices(self.touched_devices(params))  # before last_command: a finished command is on record
         with self.lock:
             self.last_command = {"id": command_id, "action": action.name, "client": client, "result": result,
                                  "message": message, "finished_at": round(time.time(), 3),
@@ -311,14 +350,34 @@ class ContractService:
                 self._expire_lease_locked()
                 since = self._no_lease_since
             if since is None:
+                self._record_heaters()
                 continue
             idle_s = time.monotonic() - since
+            self._record_heaters()
             for dev in self.module.devices.values():
                 if dev.kind == "heater" and getattr(dev, "heating", False):
                     limit = self.orphan_timeout_s.get(dev.id, 600.0)
                     if idle_s > limit:
                         dev.off("orphan timeout (no lease holder)")
                         self.emit("heater orphan timeout", {"device": dev.id, "after_s": round(idle_s)}, "warning")
+
+    def _record_heaters(self, every_s: float = 10.0) -> None:
+        """While a heater has a target, write its row every 10 s (its control thread reads the thermometer
+        anyway; nothing extra is sent to the instrument)."""
+        if self.store is None:
+            return
+        now = time.monotonic()
+        for dev in self.module.devices.values():
+            if dev.kind != "heater":
+                continue
+            heating = getattr(dev, "heating", False)
+            last = self._heater_written.get(dev.id)
+            if heating and (last is None or now - last >= every_s):
+                self._heater_written[dev.id] = now
+                self.record_devices([dev.id])
+            elif not heating and last is not None:
+                self._heater_written.pop(dev.id, None)
+                self.record_devices([dev.id])  # final row after it switched off
 
     def close(self) -> None:
         self._watchdog_stop.set()
