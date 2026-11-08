@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from .core import CLIENT_HEADER, ApiError, ContractService
 
 CLIENT_RE = re.compile(r"^[\x21-\x7e][\x20-\x7e]{0,127}$")
+CAM_RE = re.compile(r"^/cam/([A-Za-z0-9_]+)$")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 IMAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
@@ -28,6 +29,31 @@ def is_loopback(addr: str) -> bool:
         return ipaddress.ip_address(addr).is_loopback
     except ValueError:
         return False
+
+
+def camera_index(services: dict[str, ContractService]) -> dict[str, tuple[str, object]]:
+    """camera id -> (module, Camera) over all modules."""
+    return {dev_id: (name, dev) for name, svc in services.items()
+            for dev_id, dev in svc.module.devices.items() if dev.kind == "camera"}
+
+
+def cameras_view(services: dict[str, ContractService]) -> dict:
+    return {"cameras": [{"id": cid, "module": mod, "connected": bool(cam.connected), "error": cam.last_error}
+                        for cid, (mod, cam) in sorted(camera_index(services).items())]}
+
+
+def camera_frame(services: dict[str, ContractService], cam_id: str) -> tuple[int, dict | bytes, str]:
+    """Latest live-preview frame of one camera (starts its grabber; nothing is saved)."""
+    entry = camera_index(services).get(cam_id)
+    if entry is None:
+        return 404, {"error": f"no camera {cam_id!r}"}, "application/json"
+    cam = entry[1]
+    if not cam.connected:
+        return 503, {"error": f"{cam_id} not connected ({cam.last_error})"}, "application/json"
+    got = cam.live.latest()
+    if got["frame"] is None:
+        return 503, {"error": got["error"] or "no frame yet"}, "application/json"
+    return 200, got["frame"], got["type"]
 
 
 def handle_api(svc: ContractService, method: str, path: str, query: dict, headers, body: bytes,
@@ -130,6 +156,11 @@ class _Handler(BaseHTTPRequestHandler):
     def _static(self, path: str) -> None:
         if path == "/modules.json":
             return self._send(200, {"modules": sorted(self.services)})
+        if path == "/cameras.json":
+            return self._send(200, cameras_view(self.services))
+        m = CAM_RE.match(path)
+        if m:
+            return self._send(*camera_frame(self.services, m.group(1)))
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
         target = (WEB_DIR / rel).resolve()
         if WEB_DIR.resolve() not in target.parents or not target.is_file():

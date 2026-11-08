@@ -65,6 +65,20 @@ code that will talk to the real instruments.
 Real motion to a named point (`go_to_point`) stays refused until that point is measured on the bench
 (`source: measured` in `config/points.yaml`, test level L3). v1 coordinates are only starting guesses.
 
+## Remote work
+
+- **Watch** from another computer on the university network or VPN: the launcher also serves a
+  view-only page on port 8790 (three live camera pictures and the readings; GET only, no command,
+  stop, lease or unlock route; needs the access key). The link with the key is printed at start and
+  saved in `runs\real-lab\viewer-url.txt`. `--viewer-host 127.0.0.1` or `--no-viewer` keeps it local.
+- **Control** only on the lab PC itself (remote desktop): the debug page and the module services stay on
+  127.0.0.1. The debug page also shows the live camera pictures.
+- **Update** with `scripts\update.bat`: git pull main, self-check, restart the running services in the
+  same mode. It refuses (exit code 2) while a module is busy, locked, heating, has a switch on, or
+  someone holds control, and leaves the services alone if the pull or the self-check fails.
+
+Chinese guide: [docs/remote.zh.md](docs/remote.zh.md).
+
 ## Layout
 
 ```

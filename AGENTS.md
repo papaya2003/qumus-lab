@@ -24,7 +24,12 @@ scripts\check.bat                           :: self-check, opens no instrument p
 .venv\Scripts\python.exe -m pytest -q       :: fake serial only, never opens a real port
 scripts\start-demo.bat                      :: debug page on simulated instruments, http://127.0.0.1:8780/
 scripts\probe.bat --demo l1                 :: any probe command on simulated instruments
+scripts\update.bat                          :: on main only: pull, self-check, restart running services
 ```
+
+Remote access: control only through the debug page on this PC (127.0.0.1:8780). The view-only page
+(port 8790) must never get a control route (POST, commands, stop, lease, unlock); `tests/test_remote.py`
+checks this. Do not bind the module services or the debug page to anything but loopback.
 
 Real instruments: `scripts\probe.bat ...` and `scripts\start-lab.bat` (see the guide).
 

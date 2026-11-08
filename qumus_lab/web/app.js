@@ -298,6 +298,58 @@ async function stopAll() {
   $("#stopresult").textContent = "Stop " + out.join(", ");
 }
 
+/* ------------------------------------------------------------------ cameras (live preview, read only) */
+const camLoops = {};
+
+async function setupCameras() {
+  const { cameras } = await (await fetch("/cameras.json")).json();
+  const grid = $("#camgrid");
+  const box = $("#camlive");
+  let saved = null;
+  try { saved = localStorage.getItem("qumus-camlive"); } catch { saved = null; }
+  box.checked = saved !== "off";
+  grid.replaceChildren(...cameras.map((c) => {
+    const img = h("img", { alt: `Live picture from ${c.id}` });
+    const info = h("span", { class: "muted" }, box.checked ? "loading" : "off");
+    camLoops[c.id] = { img, info };
+    return h("figure", {}, img, h("figcaption", {}, h("span", {}, `${c.id} (${c.module})`), info));
+  }));
+  box.addEventListener("change", () => {
+    try { localStorage.setItem("qumus-camlive", box.checked ? "on" : "off"); } catch { /* private window */ }
+    if (box.checked) for (const id of Object.keys(camLoops)) camLoop(id);
+  });
+  if (box.checked) for (const id of Object.keys(camLoops)) camLoop(id);
+}
+
+async function camLoop(id) {
+  const c = camLoops[id];
+  if (c.running) return;
+  c.running = true;
+  while ($("#camlive").checked) {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`/cam/${id}?t=${t0}`, { cache: "no-store" });
+      if (r.ok) {
+        const old = c.img.src;
+        c.img.src = URL.createObjectURL(await r.blob());
+        if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+        c.info.textContent = new Date().toLocaleTimeString();
+        c.info.className = "muted";
+      } else {
+        const body = await r.json().catch(() => ({}));
+        c.info.textContent = body.error || `error ${r.status}`;
+        c.info.className = "warn";
+      }
+    } catch (e) {
+      c.info.textContent = "not reachable";
+      c.info.className = "warn";
+    }
+    await new Promise((res) => setTimeout(res, Math.max(200, 600 - (Date.now() - t0))));
+  }
+  c.info.textContent = "off";
+  c.running = false;
+}
+
 /* ------------------------------------------------------------------ boot */
 async function boot() {
   const list = await (await fetch("/modules.json")).json();
@@ -339,6 +391,7 @@ async function boot() {
   window.addEventListener("beforeunload", () => {
     if (control) for (const name of Object.keys(modules)) navigator.sendBeacon && fetch(`/m/${name}/api/release`, { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Qumus-Client": CLIENT }, body: "{}" });
   });
+  setupCameras().catch((e) => { $("#camgrid").textContent = `Cameras not available: ${e}`; });
   await pollState();
   setInterval(pollState, 500);
   setInterval(heartbeat, 1000);

@@ -4,17 +4,30 @@
     python -m qumus_lab.launcher               # lab PC: real ports from config/devices.yaml
 
 One process on purpose: both heaters share one TP3005P supply (COM8), and Windows COM ports can be
-opened by one process only. Loopback only by default. Ctrl+C -> safe_state (stop axes, heat off).
+opened by one process only. Ctrl+C -> safe_state (stop axes, heat off).
+
+Network: the module services and the debug page (control) listen on loopback only. The view-only page
+(cameras and readings, GET only, needs the access key) listens on 0.0.0.0:8790 so the bench can be
+watched from another computer on the university network; ``--viewer-host 127.0.0.1`` or ``--no-viewer``
+keeps it on this PC.
+
+``scripts/update.bat`` restarts a running launcher through ``<runs_dir>/shutdown.request``; the launcher
+refuses (and writes ``shutdown.refused``) while a module is busy, locked, heating, has a switch on, or
+someone holds control.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import os
 import signal
 import sys
 import threading
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .config import LabConfig, load_config
 from .lab import Lab, build_lab, demo_backends, real_backends
@@ -24,6 +37,7 @@ from .modules.stacking import build_stacking
 from .safety.zones import ZoneRegistry
 from .service.core import ContractService
 from .service.http import make_server, serve_in_thread
+from .service.viewer import lan_address, load_or_create_key, make_viewer
 from .state.store import LabStore
 
 BUILDERS = {"exfoliation": build_exfoliation, "stacking": build_stacking}
@@ -43,6 +57,26 @@ class Stack:
                 svc.safe_state(reason)
             except Exception as exc:  # noqa: BLE001
                 logging.error("safe_state %s failed: %s", svc.name, exc)
+
+    def unsafe_to_stop(self) -> list[str]:
+        """Why a restart now would interrupt something (empty = safe to stop)."""
+        out = []
+        for name, svc in self.services.items():
+            st = svc.state()
+            if st["busy"]:
+                out.append(f"{name}: busy with {st['busy_action']}")
+            if st["locked"]:
+                out.append(f"{name}: locked ({(st['fault'] or {}).get('code')}); a person must check and unlock first")
+            if st["lease"]:
+                out.append(f"{name}: control held by {st['lease']['holder']}")
+            for dev in svc.module.devices.values():
+                if dev.kind == "heater" and (getattr(dev, "heating", False)
+                                             or getattr(dev, "phase", "off") not in ("off", "reached")):
+                    out.append(f"{dev.id}: heater {dev.phase}")
+            for dev_id, timer in list(svc.module._switch_timers.items()):
+                if timer.is_alive():
+                    out.append(f"{dev_id}: switched on")
+        return out
 
     def close(self) -> None:
         for svc in self.services.values():
@@ -90,6 +124,34 @@ def _route_zone_events(zones: ZoneRegistry, services: dict[str, ContractService]
         emit(*ev)
 
 
+SHUTDOWN_REQUEST = "shutdown.request"
+SHUTDOWN_REFUSED = "shutdown.refused"
+LAUNCHER_INFO = "launcher.json"
+
+
+def handle_shutdown_request(stack: Stack, runs_dir: Path) -> bool:
+    """True when a shutdown was requested and it is safe; otherwise writes the refusal reasons."""
+    req = Path(runs_dir) / SHUTDOWN_REQUEST
+    if not req.exists():
+        return False
+    try:
+        info = json.loads(req.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        info = {}
+    try:
+        req.unlink()
+    except OSError:
+        pass
+    reasons = stack.unsafe_to_stop()
+    if reasons:
+        (Path(runs_dir) / SHUTDOWN_REFUSED).write_text(
+            json.dumps({"at_unix": time.time(), "request": info, "reasons": reasons}, indent=2), encoding="utf-8")
+        logging.warning("restart refused: %s", "; ".join(reasons))
+        return False
+    logging.info("shutdown requested by %s", info.get("by", "?"))
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="qumus-lab", description=__doc__.splitlines()[0])
     ap.add_argument("--demo", action="store_true", help="simulated devices (no hardware)")
@@ -100,7 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config-dir", default=None)
     ap.add_argument("--runs-dir", default=None)
     ap.add_argument("--demo-speed", type=float, default=5.0, help="--demo time factor for moves and heating")
-    args = ap.parse_args(argv)
+    ap.add_argument("--viewer-host", default="0.0.0.0",
+                    help="view-only camera page (GET only, access key); 127.0.0.1 keeps it on this PC")
+    ap.add_argument("--viewer-port", type=int, default=8790)
+    ap.add_argument("--no-viewer", action="store_true")
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = ap.parse_args(raw_argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     config = load_config(args.config_dir, args.runs_dir, demo=args.demo)
@@ -118,10 +185,32 @@ def main(argv: list[str] | None = None) -> int:
         serve_in_thread(web)
         servers.append(web)
         logging.info("debug page on http://%s:%d/", args.host, args.web_port)
+    viewer_url = None
+    if not args.no_viewer:
+        key = load_or_create_key(config.runs_dir)
+        viewer = make_viewer(args.viewer_host, args.viewer_port, stack.services, key)
+        serve_in_thread(viewer)
+        servers.append(viewer)
+        shown = lan_address() if args.viewer_host in ("0.0.0.0", "") else args.viewer_host
+        viewer_url = f"http://{shown}:{args.viewer_port}/?key={key}"
+        (config.runs_dir / "viewer-url.txt").write_text(viewer_url + "\n", encoding="utf-8")
+        logging.info("view-only page (cameras, readings; no control) on %s", viewer_url)
     for name, svc in stack.services.items():
         bad = {d: dev.last_error for d, dev in svc.module.devices.items() if not dev.connected}
         if bad:
             logging.warning("%s: not connected: %s", name, bad)
+
+    info_path = config.runs_dir / LAUNCHER_INFO
+    for stale in (SHUTDOWN_REQUEST, SHUTDOWN_REFUSED):
+        try:
+            (config.runs_dir / stale).unlink()
+        except OSError:
+            pass
+    info_path.write_text(json.dumps({
+        "pid": os.getpid(), "demo": args.demo, "argv": raw_argv, "started_unix": time.time(),
+        "ports": {name: int(config.module(name).get("port", 0)) for name in stack.services},
+        "web_port": None if args.no_web else args.web_port, "viewer_url": viewer_url,
+    }, indent=2), encoding="utf-8")
 
     stop = threading.Event()
 
@@ -133,13 +222,20 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGBREAK, on_signal)
     try:
         while not stop.wait(0.5):
-            pass
+            if handle_shutdown_request(stack, config.runs_dir):
+                break
     finally:
         logging.info("shutting down: safe_state (stop axes, heat off)")
         stack.safe_state("launcher shutdown")
         for srv in servers:
             srv.shutdown()
+            srv.server_close()
         stack.close()
+        try:
+            if json.loads(info_path.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                info_path.unlink()
+        except (OSError, ValueError):
+            pass
     return 0
 
 
