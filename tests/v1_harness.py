@@ -21,8 +21,23 @@ from qumus_lab.transport.serial_port import PortSpec
 V1_ROOT = Path(os.environ.get("QUMUS_V1_ROOT", "/mnt/project-files/qumus/v1-original/Qumus-lihan-graphene"))
 
 
-def v1_available() -> bool:
+def v1_tree_present() -> bool:
     return (V1_ROOT / "common" / "hardware" / "robot_arm_controller.py").is_file()
+
+
+def v1_missing() -> str | None:
+    """Why v1 code can not be run here, or None. The golden-file comparison always runs."""
+    if not v1_tree_present():
+        return "v1 source tree not present"
+    try:
+        import numpy  # noqa: F401  (v1 hardware modules import numpy at module level)
+    except ImportError:
+        return "numpy not installed (pip install -e .[dev])"
+    return None
+
+
+def v1_available() -> bool:
+    return v1_missing() is None
 
 
 class _Status:

@@ -9,4 +9,4 @@ call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -e ".[lab,dev]"
 echo.
-echo Done. Next: scripts\probe.bat ports
+echo Done. Next: scripts\check.bat

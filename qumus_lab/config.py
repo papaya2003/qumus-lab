@@ -49,6 +49,22 @@ class LabConfig:
     def all_device_ids(self) -> list[str]:
         return [d for m in self.module_names for d in self.module(m)["devices"]]
 
+    def configured_ports(self) -> list[tuple[str, str, str]]:
+        """(device, COM port, driver) for every serial port in devices.yaml, shared supply first."""
+        out = []
+        sh = self.devices.get("shared", {})
+        if "power_supply" in sh:
+            out.append(("power_supply", sh["power_supply"]["port"]["port"], "tp3005p"))
+        for dev_id in self.all_device_ids():
+            cfg = self.device_cfg(dev_id)
+            if "port" in cfg:
+                out.append((dev_id, cfg["port"]["port"], cfg["driver"]))
+            if cfg.get("relay"):
+                out.append((f"{dev_id}.relay", cfg["relay"]["port"]["port"], "relay"))
+            if cfg.get("rail"):
+                out.append((f"{dev_id}.rail", cfg["rail"]["port"]["port"], "kz100"))
+        return out
+
     def copy(self) -> LabConfig:
         return LabConfig(copy.deepcopy(self.devices), copy.deepcopy(self.points), copy.deepcopy(self.limits),
                          self.config_dir, self.runs_dir)

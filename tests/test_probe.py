@@ -23,6 +23,9 @@ def test_l1_reads_every_device_of_both_modules(cfg):
     assert set(res) == set(cfg.all_device_ids()) | {"power_supply"}
     assert all(r["ok"] for r in res.values()), {k: v for k, v in res.items() if not v["ok"]}
     assert any("L1 read: 18/18" in line for line in out)
+    cams = [d for d in res if "camera" in d]
+    assert len(cams) == 3 and all(res[c]["picture"] and __import__("pathlib").Path(res[c]["picture"]).is_file() for c in cams)
+    assert not any("MISSING" in line for line in out)  # demo: the simulated world lists every configured port
     log = (cfg.runs_dir / "probe").glob("*-probe.jsonl")
     assert any(json.loads(line)["step"] == "command" for f in log for line in f.read_text(encoding="utf-8").splitlines())
 
@@ -82,3 +85,14 @@ def test_real_heat_capped_at_40c(cfg):
 def test_cli_ports_runs_in_demo(cfg, capsys):
     assert main(["--demo", "--runs-dir", str(cfg.runs_dir), "ports"]) == 0
     assert "COM7" in capsys.readouterr().out
+
+
+def test_l2_walk_stops_at_a_lock(cfg):
+    p, out = _probe(cfg)
+    p.stack.lab.backends.world.by_device["exfoliation_vacuum"].reply = False  # first step: relay goes silent
+    try:
+        done = p.l2(confirm=False)
+    finally:
+        p.close()
+    assert len(done) == 1 and done[0]["result"] == "failed"
+    assert any("L2 walk stopped" in line for line in out)
