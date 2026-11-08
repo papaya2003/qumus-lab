@@ -6,7 +6,7 @@ import pytest
 
 from qumus_lab.config import load_config
 
-from .v1_harness import V1_ROOT, v1_available
+from .v1_harness import V1_ROOT, v1_tree_present
 
 
 def _walk(node, path=""):
@@ -36,7 +36,7 @@ def test_there_are_many_cites():
     assert len(CITES) > 60
 
 
-@pytest.mark.skipif(not v1_available(), reason="v1 source tree not present")
+@pytest.mark.skipif(not v1_tree_present(), reason="v1 source tree not present")
 @pytest.mark.parametrize("where,cite", CITES, ids=[w for w, _ in CITES])
 def test_cite_points_at_v1_line(where, cite):
     rel, line = cite["at"].rsplit(":", 1)

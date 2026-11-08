@@ -39,7 +39,7 @@ from qumus_lab.sim.emulators import (
 from qumus_lab.transport.fake_serial import FakeSerialFactory
 from qumus_lab.transport.serial_port import PortSpec
 
-from .v1_harness import PortRecorder, load_v1, patched_serial, v1_available
+from .v1_harness import PortRecorder, load_v1, patched_serial, v1_available, v1_missing
 
 GOLDEN = Path(__file__).parent / "golden" / "v1_bytes.json"
 FAST = Clock(1000.0)
@@ -221,7 +221,7 @@ def test_new_driver_matches_golden_v1_bytes(name):
     assert _run_new(name) == golden[name].encode("latin-1")
 
 
-@pytest.mark.skipif(not v1_available(), reason="v1 source tree not present")
+@pytest.mark.skipif(not v1_available(), reason=str(v1_missing()))
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
 def test_new_driver_matches_live_v1(name, monkeypatch):
     v1 = _run_v1(name, monkeypatch)
@@ -234,7 +234,7 @@ def test_new_driver_matches_live_v1(name, monkeypatch):
         GOLDEN.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
 
 
-@pytest.mark.skipif(not v1_available(), reason="v1 source tree not present")
+@pytest.mark.skipif(not v1_available(), reason=str(v1_missing()))
 def test_dracal_command_line_matches_v1(monkeypatch):
     mods = load_v1()
     seen = {}
@@ -250,7 +250,7 @@ def test_dracal_command_line_matches_v1(monkeypatch):
 
 
 # ----------------------------------------------------------------------- deliberate differences (hazards)
-@pytest.mark.skipif(not v1_available(), reason="v1 source tree not present")
+@pytest.mark.skipif(not v1_available(), reason=str(v1_missing()))
 def test_arm_connect_v1_powers_motors_new_only_queries(monkeypatch):
     rec = PortRecorder(_emus())
     patched_serial(monkeypatch, rec)
@@ -261,7 +261,7 @@ def test_arm_connect_v1_powers_motors_new_only_queries(monkeypatch):
     assert bytes(factory.opened["COM7"].tx) == b"M114\r\n"
 
 
-@pytest.mark.skipif(not v1_available(), reason="v1 source tree not present")
+@pytest.mark.skipif(not v1_available(), reason=str(v1_missing()))
 def test_reels_and_printer_connect_send_nothing_but_queries(monkeypatch):
     rec = PortRecorder(_emus())
     patched_serial(monkeypatch, rec)
