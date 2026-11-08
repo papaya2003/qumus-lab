@@ -15,8 +15,15 @@ probe:
   arm_jog_max_mm: 0.5
   stage_jog_max_mm: 0.5
   stamp_jog_max_mm: 0.1
+  stamp_z_jog_max_mm: 5.0      # operator-confirmed 5 mm Z test; X/Y/rail keep 0.1 mm
+  stamp_z_first_sign: -1     # reverse the stamp test: Z- first, then Z+ back
   gantry_jog_max_mm: 0.5
-  focus_jog_max_um: 50
+  gantry_x_jog_max_mm: 10.0   # operator-requested X test
+  gantry_z_jog_max_mm: 10.0    # retained Z cap; the current L2 test uses X
+  gantry_l2_axis: x
+  gantry_first_sign: 1       # +1 tests the positive coordinate direction first, then returns
+  focus_jog_max_um: 5000      # operator confirmed 5 mm clearance for the focus test
+  focus_l2_step_um: 5000     # down first, then back to the starting position
   reel_jog_max_deg: 10
   jog_feed_mm_min: 300          # arm / gantry feed used by jog and move_axis
   # move_axis (debug page "move to"): how far from the position just read one typed target may be.
@@ -35,12 +42,14 @@ probe:
 
 arms:
   arm_left:
+    probe_z_jog_max_mm: 10.0    # operator-requested visible L2 Z test; X/Y retain the 0.5 mm cap
     max_feed_mm_min: 5000       # v1 travelled at F5000
     travel_feed_mm_min: 1000    # used by go_to_point; v1 approach feed F1000
     min_z_mm: null              # unknown until L3
     source: v1
     cite: {at: "common/hardware/robot_arm_controller.py:219", check: "F1000"}
   arm_right:
+    probe_z_jog_max_mm: 10.0    # operator-requested visible L2 Z test; X/Y retain the 0.5 mm cap
     max_feed_mm_min: 5000
     travel_feed_mm_min: 1000
     min_z_mm: null
@@ -62,6 +71,7 @@ axes:
 
 heaters:
   exfoliation_heater:
+    probe_max_volts: 15.0       # operator-requested ceiling for this heater; transfer stays at 6.5 V
     max_c: 90                   # highest v1 approved target (exfoliation_setpoints.py:11)
     max_timeout_s: 1800
     orphan_timeout_s: 600       # no lease holder for this long while heating -> off (contract)

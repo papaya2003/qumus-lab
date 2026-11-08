@@ -367,7 +367,7 @@ def register_common(m: Module) -> None:
                                     "target_c": {"type": "number"}, "timeout_s": {"type": "number"},
                                     "volts": {"type": "number"}},
                      ("device", "target_c", "timeout_s"), precheck=pre_heat,
-                     description="Heat with a mandatory timeout. Unmeasured heaters in real mode: <= 40 C, <= 6.5 V."))
+                     description="Heat with a mandatory timeout. Unmeasured heaters in real mode: <= 40 C; per-heater voltage caps."))
         m.add(Action("heat_off", heat_off, {"device": {"type": "string", "enum": of(("heater",))}}, ("device",),
                      any_client=True, concurrent=True, allowed_when_locked=True,
                      description="Heater output and relay off. Any client, also while the module is locked."))

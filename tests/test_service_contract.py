@@ -134,7 +134,7 @@ def test_jog_caps(stack):
     svc = stack.services["stacking"]
     svc.heartbeat("probe")
     with pytest.raises(ApiError):
-        svc.command({"action": "jog", "device": "stamp", "axis": "z", "mm": 0.2}, "probe", loopback=True)
+        svc.command({"action": "jog", "device": "stamp", "axis": "z", "mm": 5.1}, "probe", loopback=True)
     r = svc.command({"action": "jog", "device": "stamp", "axis": "z", "mm": 0.05}, "probe", loopback=True)
     lc = wait_done(svc, r["command_id"])
     assert lc["result"] == "ok", lc

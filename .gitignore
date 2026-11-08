@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 runs/
 .pytest_cache/
+pytest-cache-files-*/
 .ruff_cache/
 # lab-private: never commit lab data, GDS, model weights, vendor DLLs, keys
 *.gds

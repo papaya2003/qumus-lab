@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from qumus_lab.drivers.base import Refused
+from qumus_lab.drivers.base import OutcomeUnknown, Refused
+from qumus_lab.drivers.kinesis import KinesisAxis
 from qumus_lab.launcher import build_stack
+from qumus_lab.sim.emulators import Clock, FakeKCube
 
 from .conftest import wait_done, wait_for
 
@@ -50,3 +52,35 @@ def test_arm_move_needs_a_feed(stack):
 def test_focus_refuses_moves_over_30_mm(stack):
     with pytest.raises(Refused):
         stack.lab.devices["focus"].move_by_um(30001)
+
+
+def test_kinesis_waits_for_delayed_position_feedback():
+    class DelayedCube(FakeKCube):
+        pending = None
+        reads_left = 0
+
+        def move_to(self, mm, timeout_ms):
+            self.pending = mm
+            self.reads_left = 4
+
+        def position(self):
+            if self.pending is not None:
+                self.reads_left -= 1
+                if self.reads_left == 0:
+                    super().move_to(self.pending, 0)
+                    self.pending = None
+            return super().position()
+
+    cube = DelayedCube("test", Clock(speed=20), start_mm=6.5)
+    axis = KinesisAxis("z", {}, cube, move_timeout_s=2)
+    assert axis.move_to(6.6) == pytest.approx(6.6)
+    assert cube.reads_left == 0
+
+
+def test_kinesis_idle_status_without_target_position_is_not_success(monkeypatch):
+    cube = FakeKCube("test", Clock(), start_mm=6.5)
+    monkeypatch.setattr(cube, "move_to", lambda *args: None)  # status stays idle, position never changes
+    axis = KinesisAxis("z", {}, cube, move_timeout_s=0.1)
+    with pytest.raises(OutcomeUnknown, match="target 6.6 mm not confirmed"):
+        axis.move_to(6.6)
+    assert ("stop",) in cube.calls

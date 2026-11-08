@@ -6,6 +6,7 @@ relative), arc (the v1 draw_arc: 100 relative G1 segments), power (M17/M18 X Y Z
 The apply/peel geometry (arc centre, end point, approach X) is in config/points.yaml.
 
 Changed on purpose: v1 sent ``M17 X Y Z`` on connect; here connect sends only ``M114``.
+The first explicit motion enables the motors, and acknowledged commands use v1's 50 ms pause.
 Stop sends ``M410`` (Marlin quick stop; not used by v1, confirm at L2).
 """
 
@@ -55,6 +56,7 @@ class PrinterGantry(Device):
         self.factory = serial_factory
         self.ser = None
         self.reply_timeout_s = float(cfg.get("reply_timeout_s", 5.0))
+        self.command_settle_s = float(cfg.get("command_settle_s", 0.05))
         self.stop_gcode = list(cfg.get("stop_gcode") or ["M410"])
         self.pos: dict[str, float | None] = {"x": None, "y": None, "z": None}
         self.motors_on: bool | None = None
@@ -65,6 +67,7 @@ class PrinterGantry(Device):
             self.ser = self.factory.open(self.spec)
             time.sleep(float(self.cfg.get("open_settle_s", 2.0)))
             self.ser.reset_input_buffer()
+            self.motors_on = None
             self.connected = True
             self.read()
 
@@ -79,6 +82,9 @@ class PrinterGantry(Device):
         with self._lock:
             if cmd.split(" ", 1)[0].upper() in MOTION_GCODES:
                 self.check_not_stopped()  # after M410 the host must not feed the next arc segment
+                if self.motors_on is not True:
+                    self.power(True)  # v1 enabled at connect; here only an explicit move may energise motors
+                    self.check_not_stopped()
             self.ser.reset_input_buffer()
             self.ser.write((cmd + "\n").encode())
             deadline = time.monotonic() + (timeout_s or self.reply_timeout_s)
@@ -94,6 +100,7 @@ class PrinterGantry(Device):
                         deadline = time.monotonic() + (timeout_s or self.reply_timeout_s)
                         continue
                     if low.startswith("ok") or low.endswith(" ok") or low == "ok" or " ok" in low:
+                        time.sleep(self.command_settle_s)
                         return
                 elif time.monotonic() > deadline:
                     exc = NoReply(f"{self.id}: no 'ok' after {cmd!r}")
@@ -110,17 +117,24 @@ class PrinterGantry(Device):
             self.ser.write(b"M114\n")
             deadline = time.monotonic() + 2.0
             text = ""
+            acknowledged = False
             while time.monotonic() < deadline:
                 if self.ser.in_waiting:
                     line = self.ser.readline().decode(errors="ignore").strip()
                     text += line + " "
-                    if "X:" in line and "Y:" in line:
+                    low = line.lower()
+                    if low.startswith("ok") or low.endswith(" ok") or " ok" in low:
+                        acknowledged = True
+                    if acknowledged and POS_RE.search(text):
                         break
                 else:
                     time.sleep(0.01)
             m = POS_RE.search(text)
             if not m:
                 raise NoReply(f"{self.id}: M114 gave no position ({text.strip()!r})")
+            if not acknowledged:
+                raise NoReply(f"{self.id}: M114 position arrived without its acknowledgement ({text.strip()!r})")
+            time.sleep(self.command_settle_s)
             self.pos = {"x": float(m.group(1)), "y": float(m.group(2)), "z": float(m.group(3))}
             self.stamp_read()
             return self.snapshot()
