@@ -52,7 +52,8 @@ one independent service.
   "lease": {"holder": "qumus-agent", "remaining_s": 2.4},
   "last_command": {"id": "c-...", "action": "jog", "client": "qumus-agent",
                    "result": "ok", "message": "", "finished_at": 1794099999.8, "output": {}},
-  "devices": {"arm_left": {"connected": true, "x": 0.0, "y": 0.0, "z": 0.0, "...": "..."}}
+  "devices": {"arm_left": {"connected": true, "x_mm": 0.0, "y_mm": 220.0, "z_mm": 95.0, "...": "..."}},
+  "zones": {"middle_board": {"holder": "arm_left", "since_unix": 1794100000.0, "inside": ["arm_left"]}}
 }
 ```
 
@@ -68,7 +69,7 @@ refusal comes back at once.
 | 400 | bad JSON, unknown action, missing or out-of-range parameter, a SafetyGate cap |
 | 403 | a `local_only` action or `unlock` from a non-loopback address |
 | 404 | no such route or image |
-| 409 | no lease, lease held by someone else, busy, locked, unmeasured point in real mode, power supply owned by the other heater |
+| 409 | no lease, lease held by someone else, busy, locked, unmeasured point in real mode, power supply owned by the other heater, zone held by the other arm or not taken |
 | 415 | POST without `Content-Type: application/json` |
 | 503 | device not connected |
 
@@ -95,6 +96,16 @@ Both modules:
 | `heat` | `device, target_c, timeout_s, volts?` | | heat with a mandatory timeout; unmeasured heaters in real mode: <= 40 C at <= 6.5 V |
 | `heat_off` | `device` | A | heater output and relay off |
 
+Zones (both modules; the middle board is shared by the two arms, see [lab-state.md](lab-state.md)):
+
+| Action | Params | Flags | What it does |
+| --- | --- | --- | --- |
+| `zone_acquire` | `zone, device` | | take the zone for an arm; 409 if the other arm holds it |
+| `zone_release` | `zone, device` | | give it back; 409 while the arm is inside (a move to a point outside releases it automatically) |
+| `zone_clear` | `zone` | A L | a person checked the bench: no arm is in the zone |
+
+`go_to_point` to a point inside a zone answers 409 unless the arm holds that zone.
+
 Exfoliation only: `apply_tape` (M), `peel_tape {speed}` (M, 50 to 500 mm/min), `advance_tape {deg}`
 (M, real-mode cap 10 deg before L3), `gantry_power {on}`.
 
@@ -112,5 +123,8 @@ These are additions beyond the shared contract, kept so that the shared spec can
 - `GET images/<image_id>` returns a captured picture, so a client does not need file access.
 - `unlock` is a `local_only` endpoint: only a person on the lab PC can clear a lock.
 - `describe` adds `module`, and each command adds `motion`, `any_client`, `local_only`, `description`.
+  `describe.zones` is the list of zone names (as the shared contract), and `state.zones` adds each
+  zone's holder.
+- Each finished command is written to the device table of qumus.db before `last_command` shows it.
 - `set_switch` and `jog` are `local_only` probe tools. The agent's switching (vacuum held for minutes)
   and long moves will be separate L3 actions once the bench is measured.

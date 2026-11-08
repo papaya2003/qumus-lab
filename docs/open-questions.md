@@ -67,7 +67,9 @@ update `config/` (and this page) with what the bench shows.
 21. **`set_switch` and `jog` are local only** (probe and debug page on the lab PC), with switches
     turning off after <= 10 s. The agent will need L3 actions that hold vacuum for minutes; they come
     after the bench is measured.
-22. **Middle-board lock and `runs/real-lab/qumus.db`** (device / sample / event tables) are not done.
+22. **Middle-board lock** covers the slot points S1-S14 of both arms (`config/points.yaml` `zones:`).
+    Are there other places both arms reach (the hand-over route, the stage edges)? Restart
+    reconciliation of `qumus.db` and the camera freshness limit (10 min proposed) are still open.
 23. **Default branch.** The branch was pushed before `main` existed, so GitHub may show it as the
     default. Set the default branch to `main` in the repo settings.
 24. **Fonts.** The debug page loads Barlow from Google Fonts; offline it falls back to Segoe UI.

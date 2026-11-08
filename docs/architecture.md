@@ -71,9 +71,15 @@ configured port (G-code arm, Marlin gantry, AT relays, TP3005P, Arduino reels, K
 echo and timed motion, TMCL focus, turret), fake K-Cubes, a first-order thermal model behind the fake
 Dracal CLI, and synthetic camera frames. The same emulators drive the tests.
 
+## Lab state
+
+`runs/real-lab/qumus.db` (demo: `runs/demo/qumus.db`) holds the device, sample, event and zone tables;
+the services write it after every command. The middle-board occupancy lock lets one arm at a time into the
+middle board. Details: [lab-state.md](lab-state.md).
+
 ## Not done tonight (next steps)
 
-- Middle-board occupancy lock and `runs/real-lab/qumus.db` (device / sample / event tables).
+- Restart reconciliation of the stored state, and sample writes from L4 actions.
 - L3+ actions (pick chip, place chip, stamp load, massage) composed from the generic operations once
   points are measured.
 - Recognition and the two-camera check.
