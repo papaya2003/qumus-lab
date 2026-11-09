@@ -5,6 +5,8 @@ Every action: gate check first, then generic driver operations, with a cancel ch
 
 from __future__ import annotations
 
+import math
+
 from ..drivers.base import DriverError
 from ..safety.gate import Rejected
 from .base import Action, ActionContext, Module
@@ -159,6 +161,54 @@ def jog(ctx: ActionContext, p: dict) -> dict:
     raise Rejected(f"cannot jog {dev.id}")
 
 
+AXES = {"arm": ("x", "y", "z"), "gantry": ("x", "z"), "focus": ("z",)}
+
+
+def _current(dev, axis: str) -> float:
+    """Read the device and return the axis position (mm; focus: um estimate). Unknown -> Rejected."""
+    if dev.kind == "stage":
+        return float(dev.read_axis_mm(axis))
+    if dev.kind == "manipulator":
+        dev.read()
+        cur = dev.position(axis)
+    else:
+        allowed = AXES.get(dev.kind, ())
+        if axis not in allowed:
+            raise Rejected(f"{dev.id} axis must be one of {', '.join(allowed)}")
+        key = "z_um" if dev.kind == "focus" else f"{axis}_mm"
+        cur = dev.read().get(key)
+    if cur is None:
+        raise Rejected(f"{dev.id}.{axis} position unknown; cannot move to a target")
+    return float(cur)
+
+
+def move_axis(ctx: ActionContext, p: dict) -> dict:
+    """Move one axis to a typed target (debug page). Same feeds as jog; distance capped by the gate."""
+    dev = ctx.device(p["device"], MOVERS)
+    axis, target = p["axis"], float(p["target"])
+    cur = _current(dev, axis)
+    ctx.gate.check_target_move(dev.kind, dev.id, axis, cur, target)
+    ctx.check()
+    feed = float(ctx.gate.probe.get("jog_feed_mm_min", 300))
+    if dev.kind == "arm":
+        if axis == "z":
+            ctx.gate.check_arm_z(dev.id, target)
+        tgt = {"x": None, "y": None, "z": None}
+        tgt[axis] = target
+        return dev.move_to(tgt["x"], tgt["y"], tgt["z"], feed)
+    if dev.kind in ("stage", "manipulator"):
+        ctx.gate.check_axis_target(dev.id, axis, target, for_point=False)
+        dev.move_to(axis, target)
+        return dev.snapshot()
+    if dev.kind == "gantry":
+        dev.move(**{axis: target}, feed=feed, relative=False)
+        return dev.read()
+    if dev.kind == "focus":
+        dev.move_by_um(target - cur)
+        return dev.snapshot()
+    raise Rejected(f"cannot move {dev.id}")
+
+
 def arm_suction(ctx: ActionContext, p: dict) -> dict:
     dev = ctx.device(p["device"], ("arm",))
     dev.set_vacuum(bool(p["on"]))
@@ -243,6 +293,14 @@ def pre_jog(m: Module, p: dict) -> None:
     m.gate.check_jog(dev.kind, dev.id, p["axis"], amount)
 
 
+def pre_move_axis(m: Module, p: dict) -> None:
+    dev = _dev(m, p["device"])
+    if dev.kind not in MOVERS:
+        raise Rejected(f"{dev.id} ({dev.kind}) cannot be moved")
+    if not math.isfinite(float(p["target"])):
+        raise Rejected("target must be a finite number")
+
+
 def pre_set_switch(m: Module, p: dict) -> None:
     if p.get("on"):
         m.gate.switch_auto_off(True, p.get("auto_off_s"))
@@ -273,6 +331,11 @@ def register_common(m: Module) -> None:
                               "axis": {"type": "string"}, "mm": {"type": "number"}},
                  ("device", "axis", "mm"), motion=True, local_only=True, precheck=pre_jog,
                  description="Small relative move (caps: arm/stage/gantry 0.5 mm, stamp 0.1 mm, focus 0.05 mm)."))
+    m.add(Action("move_axis", move_axis, {"device": {"type": "string", "enum": of(MOVERS)},
+                                          "axis": {"type": "string"}, "target": {"type": "number"}},
+                 ("device", "axis", "target"), motion=True, local_only=True, precheck=pre_move_axis,
+                 description="Move one axis to a typed position (mm; focus: um). At most 10 mm from where it is "
+                             "(stamp x/y 1 mm, focus 500 um); stamp z and arm z down keep the jog cap."))
     if of(("arm",)):
         m.add(Action("arm_suction", arm_suction, {"device": {"type": "string", "enum": of(("arm",))},
                                                   "on": {"type": "boolean"}}, ("device", "on"),

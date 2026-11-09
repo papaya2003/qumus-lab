@@ -3,9 +3,13 @@
 
 const CLIENT = "debug-page-" + Math.random().toString(36).slice(2, 6);
 const MODULE_TITLES = { exfoliation: "Exfoliation (left)", stacking: "Stacking (right)" };
-const modules = {};   // name -> {describe, state, el, rows, evNext, holder}
+const modules = {};   // name -> {describe, state, el, nav, evNext}
 const events = [];
 let control = false;
+let current = null;   // module shown in the main area
+const HOLD_DELAY_MS = 350;   // a press longer than this keeps stepping
+const HOLD_MAX_STEPS = 20;   // a hold stops by itself after this many steps (e.g. a lost mouse-up over remote desktop)
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const h = (tag, attrs = {}, ...kids) => {
@@ -59,7 +63,7 @@ async function send(mod, action, params = {}) {
 
 function flash(mod, text, cls) {
   const m = modules[mod];
-  m.flash = { text, cls, until: Date.now() + 8000 };
+  m.flash = { text, cls, at: Date.now(), until: Date.now() + 8000 };
   renderStatus(m);
 }
 
@@ -83,6 +87,78 @@ const JOG = {
   gantry: { axes: ["x", "z"], steps: [0.1, 0.5] },
   focus: { axes: ["z"], steps: [0.005, 0.02, 0.05] },
 };
+
+const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
+const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
+
+/* Wait for a command to finish (last_command carries its id). Returns last_command, or null on timeout. */
+async function waitDone(mod, id, timeoutMs = 60000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const r = await api(mod, "GET", "/api/state").catch(() => null);
+    if (r && r.status === 200) {
+      modules[mod].state = r.data;
+      if (r.data.last_command && r.data.last_command.id === id) return r.data.last_command;
+    }
+    await sleep(60);
+  }
+  return null;
+}
+
+/* Hold-to-move: every step is an ordinary capped jog that the gate checks; the next one is sent only after the
+   last one finished ok and while the button is still held. Letting go sends nothing more (the step that is
+   running finishes; an arm has no stop command, so no stop is sent). */
+let activeHold = null;
+function releaseHold() { if (activeHold) { activeHold.held = false; activeHold = null; } }
+window.addEventListener("blur", releaseHold);
+document.addEventListener("visibilitychange", () => { if (document.hidden) releaseHold(); });
+
+function holdButton(mod, label, paramsFn, tip) {
+  const b = h("button", { type: "button", class: "hold", "data-action": "jog", "data-tip": tip, title: tip, "aria-label": tip }, label);
+  const run = async (hold) => {
+    const m = modules[mod];
+    if (m.stepping) { releaseHold(); return; }  // one stepping loop per module
+    m.stepping = true;
+    const t0 = Date.now();
+    let steps = 0;
+    b.classList.add("holding");
+    try {
+      while (true) {
+        const r = await send(mod, "jog", paramsFn());
+        if (r.status !== 202) break;
+        steps += 1;
+        const lc = await waitDone(mod, r.data.command_id);
+        if (!lc || lc.result !== "ok" || !hold.held) break;
+        const wait = HOLD_DELAY_MS - (Date.now() - t0);
+        if (wait > 0) await sleep(wait);
+        if (!hold.held) break;
+        if (steps >= HOLD_MAX_STEPS) {
+          flash(mod, `stopped after ${steps} steps: let go and press again to keep moving`, "stopped");
+          break;
+        }
+      }
+    } finally {
+      m.stepping = false;
+      b.classList.remove("holding");
+      if (activeHold === hold) activeHold = null;
+      refreshGuards(modules[mod]);
+    }
+  };
+  b.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || b.disabled || activeHold) return;
+    e.preventDefault();
+    try { b.setPointerCapture(e.pointerId); } catch { /* old browser */ }
+    activeHold = { held: true };
+    run(activeHold);
+  });
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) b.addEventListener(ev, releaseHold);
+  b.addEventListener("click", (e) => {  // keyboard (Enter / Space): exactly one step
+    if (e.detail !== 0 || b.disabled || activeHold) return;
+    activeHold = { held: false };
+    run(activeHold);
+  });
+  return b;
+}
 
 function guarded(mod, action, label, paramsFn, cls = "") {
   const b = h("button", { type: "button", class: cls, "data-action": action }, label);
@@ -115,11 +191,12 @@ function buildRow(mod, d) {
     ctl.append(h("label", { class: "muted" }, "step ", step));
     for (const axis of jog.axes) {
       ctl.append(h("span", { class: "jog" },
-        guarded(mod, "jog", "-", () => ({ device: d.id, axis, mm: -Number(step.value) })),
+        holdButton(mod, "-", () => ({ device: d.id, axis, mm: -Number(step.value) }), `${d.id} ${axis} minus: click = one step, hold = keep stepping`),
         h("b", {}, axis),
-        guarded(mod, "jog", "+", () => ({ device: d.id, axis, mm: Number(step.value) }))));
+        holdButton(mod, "+", () => ({ device: d.id, axis, mm: Number(step.value) }), `${d.id} ${axis} plus: click = one step, hold = keep stepping`)));
     }
   }
+  if (jog && m.describe.commands.move_axis) ctl.append(moveTo(mod, d, jog.axes));
   if (d.kind === "arm") {
     ctl.append(guarded(mod, "arm_suction", "Suction on", () => ({ device: d.id, on: true })),
                guarded(mod, "arm_suction", "Suction off", () => ({ device: d.id, on: false })));
@@ -141,8 +218,12 @@ function buildRow(mod, d) {
                guarded(mod, "heat_off", "Heat off", () => ({ device: d.id })));
   }
   if (d.kind === "camera") {
-    ctl.append(guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
-    row.append(h("div", { class: "ctl" }, h("img", { class: "thumb", alt: `last picture from ${d.id}`, hidden: "" })));
+    row.classList.add("cam");
+    const live = cameraLive(mod, d.id);
+    ctl.append(live.toggle, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
+    const last = h("a", { class: "lastcap", target: "_blank", rel: "noopener", hidden: "" },
+      h("img", { class: "thumb", alt: `last captured picture from ${d.id}` }), h("span", { class: "muted" }, "last capture"));
+    row.append(h("div", { class: "liveview" }, live.figure, last));
   }
   if (d.kind === "tape_reels" && m.describe.commands.advance_tape) {
     const deg = numInput(5, 1, 10, 1, "degrees");
@@ -175,18 +256,47 @@ function renderRow(m, mod, id, st) {
   }
   $(".err", row).textContent = st.error ? st.error : "";
   if (st.kind === "camera" && st.last_image_id) {
-    const img = $("img.thumb", row);
+    const a = $("a.lastcap", row);
     const src = `/m/${mod}/api/images/${encodeURIComponent(st.last_image_id)}`;
-    if (img && img.dataset.src !== src) { img.dataset.src = src; img.src = src; img.hidden = false; }
+    if (a && a.dataset.src !== src) { a.dataset.src = src; a.href = src; $("img", a).src = src; a.hidden = false; }
+  }
+  const mv = $(".moveto", row);
+  if (mv) {
+    const inp = $("input", mv);
+    const cur = st[axisKey(st.kind, $("select", mv).value)];
+    $(".now", mv).textContent = `now ${fmt(cur, st.kind === "focus" ? 1 : 3)}`;
+    if (inp.value === "" && typeof cur === "number" && document.activeElement !== inp) inp.value = String(Number(cur.toFixed(4)));
   }
 }
 
 function refreshGuards(m) {
   for (const b of m.el.querySelectorAll("button[data-action]")) {
+    if (b.classList.contains("holding")) continue;
     const g = canRun(m, b.dataset.action);
     b.disabled = !g.ok;
-    b.title = g.ok ? "" : g.why;
+    b.title = g.ok ? (b.dataset.tip || "") : g.why;
   }
+}
+
+/* Typed target for one axis. The gate allows at most 10 mm from where the axis is (stamp x/y 1 mm, focus
+   500 um); stamp z and arm z down keep the jog cap. The service reads the position again before it moves. */
+function moveTo(mod, d, axes) {
+  const unit = axisUnit(d.kind);
+  const axis = h("select", { "aria-label": `${d.id} axis to move` }, axes.map((a) => h("option", { value: a }, a)));
+  const target = h("input", { type: "number", step: d.kind === "focus" ? "1" : "0.01", "aria-label": `${d.id} target (${unit})` });
+  const now = h("span", { class: "now muted" }, "");
+  axis.addEventListener("change", () => { target.value = ""; renderRow(modules[mod], mod, d.id, modules[mod].state && modules[mod].state.devices[d.id]); });
+  const go = guarded(mod, "move_axis", "Move", () => {
+    const st = modules[mod].state && modules[mod].state.devices[d.id];
+    const cur = st ? st[axisKey(d.kind, axis.value)] : null;
+    const t = Number(target.value);
+    if (target.value === "" || !Number.isFinite(t)) { flash(mod, "type a target position first", "failed"); return null; }
+    if (!confirm(`Move ${d.id} ${axis.value} from ${fmt(cur)} to ${t} ${unit}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
+    return { device: d.id, axis: axis.value, target: t };
+  });
+  go.dataset.tip = `Move one axis to the typed position (at most ${d.kind === "focus" ? "500 um" : d.kind === "manipulator" ? "1 mm, z 0.1 mm" : "10 mm"} away)`;
+  return h("span", { class: "moveto" }, h("span", { class: "muted" }, "move "), axis, h("span", { class: "muted" }, " to "), target,
+    h("span", { class: "muted" }, ` ${unit} `), go, now);
 }
 
 function renderStatus(m) {
@@ -201,7 +311,8 @@ function renderStatus(m) {
   parts.push(h("span", { class: "muted" }, lease));
   for (const [zone, z] of Object.entries(st.zones || {})) parts.push(...zoneParts(m, zone, z));
   const lc = st.last_command;
-  if (m.flash && m.flash.until > Date.now()) parts.push(h("span", { class: "last " + m.flash.cls }, m.flash.text));
+  const flashNewer = m.flash && m.flash.until > Date.now() && !(lc && lc.finished_at * 1000 > m.flash.at);
+  if (flashNewer) parts.push(h("span", { class: "last " + m.flash.cls }, m.flash.text));
   else if (lc) parts.push(h("span", { class: "last " + lc.result }, `${lc.action}: ${lc.result}${lc.message ? ", " + lc.message : ""}`));
   box.replaceChildren(...parts);
 }
@@ -247,6 +358,7 @@ async function pollState() {
     } catch { m.state = null; }
     if (m.state) for (const [id, st] of Object.entries(m.state.devices)) renderRow(m, name, id, st);
     renderStatus(m);
+    renderNav(m);
     refreshGuards(m);
   }
   const holders = Object.values(modules).map((m) => m.state && m.state.lease && m.state.lease.holder).filter(Boolean);
@@ -299,33 +411,38 @@ async function stopAll() {
 }
 
 /* ------------------------------------------------------------------ cameras (live preview, read only) */
+/* Each camera row shows its live picture (about 5 per second, nothing saved) while its module is on screen,
+   the page is visible and "Live" is ticked. The service grabs frames only while someone asks for them. */
 const camLoops = {};
 
-async function setupCameras() {
-  const { cameras } = await (await fetch("/cameras.json")).json();
-  const grid = $("#camgrid");
-  const box = $("#camlive");
+function cameraLive(mod, id) {
+  const img = h("img", { alt: `Live picture from ${id}` });
+  const info = h("span", { class: "muted" }, "off");
+  const box = h("input", { type: "checkbox" });
   let saved = null;
-  try { saved = localStorage.getItem("qumus-camlive"); } catch { saved = null; }
+  try { saved = localStorage.getItem(`qumus-camlive-${id}`); } catch { saved = null; }
   box.checked = saved !== "off";
-  grid.replaceChildren(...cameras.map((c) => {
-    const img = h("img", { alt: `Live picture from ${c.id}` });
-    const info = h("span", { class: "muted" }, box.checked ? "loading" : "off");
-    camLoops[c.id] = { img, info };
-    return h("figure", {}, img, h("figcaption", {}, h("span", {}, `${c.id} (${c.module})`), info));
-  }));
   box.addEventListener("change", () => {
-    try { localStorage.setItem("qumus-camlive", box.checked ? "on" : "off"); } catch { /* private window */ }
-    if (box.checked) for (const id of Object.keys(camLoops)) camLoop(id);
+    try { localStorage.setItem(`qumus-camlive-${id}`, box.checked ? "on" : "off"); } catch { /* private window */ }
+    startCameras();
   });
-  if (box.checked) for (const id of Object.keys(camLoops)) camLoop(id);
+  camLoops[id] = { mod, img, info, box, running: false };
+  return { toggle: h("label", { class: "muted camtoggle" }, box, " Live"),
+           figure: h("figure", { class: "live" }, img, h("figcaption", {}, info)) };
+}
+
+const camWanted = (c) => c.box.checked && c.mod === current && !document.hidden;
+
+function startCameras() {
+  for (const id of Object.keys(camLoops)) if (camWanted(camLoops[id])) camLoop(id);
 }
 
 async function camLoop(id) {
   const c = camLoops[id];
   if (c.running) return;
   c.running = true;
-  while ($("#camlive").checked) {
+  c.info.textContent = "loading";
+  while (camWanted(c)) {
     const t0 = Date.now();
     try {
       const r = await fetch(`/cam/${id}?t=${t0}`, { cache: "no-store" });
@@ -333,7 +450,7 @@ async function camLoop(id) {
         const old = c.img.src;
         c.img.src = URL.createObjectURL(await r.blob());
         if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-        c.info.textContent = new Date().toLocaleTimeString();
+        c.info.textContent = `live, ${new Date().toLocaleTimeString()}`;
         c.info.className = "muted";
       } else {
         const body = await r.json().catch(() => ({}));
@@ -344,10 +461,40 @@ async function camLoop(id) {
       c.info.textContent = "not reachable";
       c.info.className = "warn";
     }
-    await new Promise((res) => setTimeout(res, Math.max(200, 600 - (Date.now() - t0))));
+    await sleep(Math.max(80, 200 - (Date.now() - t0)));
   }
-  c.info.textContent = "off";
+  c.info.textContent = c.box.checked ? "paused" : "off";
+  c.info.className = "muted";
   c.running = false;
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) startCameras(); });
+
+/* ------------------------------------------------------------------ module switcher (left column) */
+function navItem(name, title, service) {
+  const state = h("span", { class: "navstate" }, "connecting");
+  const b = h("button", { type: "button", onclick: () => select(name) },
+    h("span", { class: "navname" }, title), h("span", { class: "navport muted" }, service), state);
+  return { li: h("li", {}, b), button: b, state };
+}
+
+function renderNav(m) {
+  const st = m.state;
+  const s = m.nav.state;
+  if (!st) { s.textContent = "not reachable"; s.className = "navstate locked"; return; }
+  if (st.locked) { s.textContent = "Locked"; s.className = "navstate locked"; return; }
+  s.textContent = st.busy ? `Busy: ${st.busy_action}` : "Ready";
+  s.className = "navstate " + (st.busy ? "busy" : "ok");
+}
+
+function select(name) {
+  if (!modules[name]) name = Object.keys(modules)[0];
+  current = name;
+  for (const [n, m] of Object.entries(modules)) {
+    m.el.hidden = n !== name;
+    if (n === name) m.nav.button.setAttribute("aria-current", "page"); else m.nav.button.removeAttribute("aria-current");
+  }
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  startCameras();
 }
 
 /* ------------------------------------------------------------------ boot */
@@ -374,9 +521,14 @@ async function boot() {
     });
     if (!pts.length) $(".goto", el).hidden = true;
     for (const dev of d.devices) $(".devices", el).append(buildRow(name, dev));
+    if (!d.commands.jog) $(".howto", el).hidden = true;
+    m.nav = navItem(name, MODULE_TITLES[name] || name, d.service);
+    $("#modnav").append(m.nav.li);
     bench.append(el);
     anyDemo = anyDemo || d.demo;
   }
+  select(location.hash.slice(1));
+  window.addEventListener("hashchange", () => select(location.hash.slice(1)));
   const mode = $("#mode");
   mode.textContent = anyDemo ? "Demo: simulated devices" : "Real instruments";
   mode.className = "mode " + (anyDemo ? "demo" : "real");
@@ -391,7 +543,6 @@ async function boot() {
   window.addEventListener("beforeunload", () => {
     if (control) for (const name of Object.keys(modules)) navigator.sendBeacon && fetch(`/m/${name}/api/release`, { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Qumus-Client": CLIENT }, body: "{}" });
   });
-  setupCameras().catch((e) => { $("#camgrid").textContent = `Cameras not available: ${e}`; });
   await pollState();
   setInterval(pollState, 500);
   setInterval(heartbeat, 1000);

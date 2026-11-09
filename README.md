@@ -110,3 +110,4 @@ docs/              architecture, contract, v1 mapping, open questions, debug pag
 Docs: [architecture](docs/architecture.md), [contract](docs/contract.md),
 [v1 mapping and hazards](docs/v1-mapping.md), [open questions](docs/open-questions.md),
 [debug page design](docs/debug-page-design.md), [lab state and middle-board lock](docs/lab-state.md).
+L3 measurement sheet (Chinese): [docs/l3-measurements.zh.md](docs/l3-measurements.zh.md).
