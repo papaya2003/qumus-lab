@@ -5,6 +5,10 @@ right index 2), common/hardware/camera_controller.py (Uvcham: enum, open(id), pu
 pull into a stride-aligned buffer; OpenCV fallback with CAP_DSHOW, MJPG, buffer size 1).
 cv2, numpy and the Uvcham module are imported lazily, only when a real camera is opened.
 A capture is saved to ``runs/real-lab/captures/<image_id>.<ext>`` and returns its id.
+
+Live preview (debug page and the view-only page): while someone is watching, one background thread per
+camera grabs a small JPEG about twice a second under the same lock as ``capture``; it stops by itself
+10 s after the last viewer request. Preview frames are never saved.
 """
 
 from __future__ import annotations
@@ -28,6 +32,19 @@ class CameraBackend(Protocol):
     def open(self) -> None: ...
     def grab(self) -> tuple[bytes, int, int]: ...
     def close(self) -> None: ...
+    # optional: def grab_preview(self, max_width: int, quality: int) -> tuple[bytes, int, int]
+
+
+def _encode_preview(frame, max_width: int, quality: int) -> tuple[bytes, int, int]:
+    import cv2
+
+    h, w = frame.shape[:2]
+    if w > max_width:
+        frame = cv2.resize(frame, (max_width, int(h * max_width / w)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    if not ok:
+        raise NoReply("JPEG encode failed")
+    return buf.tobytes(), frame.shape[1], frame.shape[0]
 
 
 class OpenCVBackend:
@@ -55,18 +72,25 @@ class OpenCVBackend:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.cap = cap
 
-    def grab(self) -> tuple[bytes, int, int]:
-        import cv2
-
+    def _frame(self, reads: int):
         frame = None
-        for _ in range(3):  # drop stale buffered frames
+        for _ in range(reads):  # drop stale buffered frames
             ok, frame = self.cap.read()
         if frame is None:
             raise NoReply(f"camera {self.index}: no frame")
+        return frame
+
+    def grab(self) -> tuple[bytes, int, int]:
+        import cv2
+
+        frame = self._frame(3)
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.q])
         if not ok:
             raise NoReply("JPEG encode failed")
         return buf.tobytes(), frame.shape[1], frame.shape[0]
+
+    def grab_preview(self, max_width: int, quality: int) -> tuple[bytes, int, int]:
+        return _encode_preview(self._frame(1), max_width, quality)
 
     def close(self) -> None:
         if self.cap is not None:
@@ -109,17 +133,23 @@ class UvchamBackend:
         self.cam.start(None, lambda *_: None, self)
         time.sleep(0.3)
 
-    def grab(self) -> tuple[bytes, int, int]:
-        import cv2
+    def _frame(self):
         import numpy as np
 
         self.cam.pull(self.buf)
         raw = np.frombuffer(self.buf, np.uint8).reshape(self.h, self.stride)[:, : self.w * 3]
-        img = raw.reshape(self.h, self.w, 3)
-        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), self.q])
+        return raw.reshape(self.h, self.w, 3)
+
+    def grab(self) -> tuple[bytes, int, int]:
+        import cv2
+
+        ok, buf = cv2.imencode(".jpg", self._frame(), [int(cv2.IMWRITE_JPEG_QUALITY), self.q])
         if not ok:
             raise NoReply("JPEG encode failed")
         return buf.tobytes(), self.w, self.h
+
+    def grab_preview(self, max_width: int, quality: int) -> tuple[bytes, int, int]:
+        return _encode_preview(self._frame(), max_width, quality)
 
     def close(self) -> None:
         if self.cam is not None:
@@ -185,14 +215,30 @@ class Camera(Device):
         self.size = (None, None)
         self.last_capture_unix: float | None = None
         self._cam_lock = threading.Lock()
+        self.live = LivePreview(self, fps=float(cfg.get("preview_fps", 2.0)),
+                                max_width=int(cfg.get("preview_max_width", 960)),
+                                quality=int(cfg.get("preview_quality", 70)))
 
     def connect(self) -> None:
         self.backend.open()
         self.connected = True
 
     def close(self) -> None:
-        self.backend.close()
+        self.live.stop()
+        with self._cam_lock:
+            self.backend.close()
         self.connected = False
+
+    def grab_preview(self, max_width: int, quality: int) -> tuple[bytes, int, int]:
+        """One small frame for the live view (not saved). Shares the lock with capture()."""
+        self.require_connected()
+        with self._cam_lock:
+            fn = getattr(self.backend, "grab_preview", None)
+            return fn(max_width, quality) if fn is not None else self.backend.grab()
+
+    @property
+    def preview_type(self) -> str:
+        return "image/png" if self.backend.ext == "png" else "image/jpeg"
 
     def capture(self) -> dict:
         self.require_connected()
@@ -211,3 +257,63 @@ class Camera(Device):
     def snapshot(self) -> dict:
         return {"last_image_id": self.last_image_id, "width_px": self.size[0], "height_px": self.size[1],
                 "last_capture_unix": self.last_capture_unix}
+
+
+class LivePreview:
+    """Latest preview frame of one camera, grabbed in the background only while someone is watching."""
+
+    def __init__(self, camera: Camera, *, fps: float = 2.0, idle_s: float = 10.0, max_width: int = 960,
+                 quality: int = 70, clock: Callable[[], float] = time.monotonic):
+        self.camera = camera
+        self.period = 1.0 / max(0.1, min(float(fps), 10.0))
+        self.idle_s = float(idle_s)
+        self.max_width, self.quality = int(max_width), int(quality)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._new = threading.Condition(self._lock)
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._last_request = 0.0
+        self.frame: bytes | None = None
+        self.frame_unix: float | None = None
+        self.error: str | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def latest(self, wait_s: float = 3.0) -> dict:
+        """Mark a viewer request, start the grabber if needed, and return the newest frame (waiting for
+        the first one up to ``wait_s``). ``frame`` is None when the camera gives no picture."""
+        with self._lock:
+            self._last_request = self._clock()
+            if not self.running and not self._stop.is_set():
+                self._thread = threading.Thread(target=self._run, daemon=True, name=f"preview-{self.camera.id}")
+                self._thread.start()
+            if self.frame is None and self.error is None:
+                self._new.wait(timeout=wait_s)
+            return {"frame": self.frame, "type": self.camera.preview_type, "frame_unix": self.frame_unix,
+                    "error": self.error}
+
+    def stop(self) -> None:
+        self._stop.set()
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=2)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                if self._clock() - self._last_request > self.idle_s:
+                    self._thread = None  # nobody watching: stop grabbing
+                    return
+            try:
+                data, _, _ = self.camera.grab_preview(self.max_width, self.quality)
+                with self._lock:
+                    self.frame, self.frame_unix, self.error = data, time.time(), None
+                    self._new.notify_all()
+            except Exception as exc:  # noqa: BLE001 - a broken camera must not kill the viewer
+                with self._lock:
+                    self.error = f"{type(exc).__name__}: {exc}"
+                    self._new.notify_all()
+            self._stop.wait(self.period)

@@ -18,6 +18,7 @@ qumus-lab = "qumus_lab.launcher:main"
 qumus-probe = "qumus_lab.probe.cli:main"
 qumus-selfcheck = "qumus_lab.selfcheck:main"
 qumus-state = "qumus_lab.state.__main__:main"
+qumus-update = "qumus_lab.update:main"
 
 [tool.setuptools.packages.find]
 include = ["qumus_lab*"]

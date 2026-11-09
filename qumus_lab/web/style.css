@@ -135,3 +135,11 @@ input[type="number"] { width: 5.2em; }
 .stopresult:empty { display: none; }
 @media (max-width: 560px) { body { padding-bottom: 150px; } .estop { padding: 10px 16px; } #stopall { padding: 8px 24px; } .estop p { font-size: 13px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.cameras { max-width: 1500px; margin: 0 auto; padding: 0 24px 16px; }
+.camgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.camgrid figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.camgrid img { display: block; width: 100%; height: auto; min-height: 100px; background: #000; border-radius: 4px; }
+.camgrid figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-top: 4px; }
+.camgrid figcaption .warn { color: var(--warn); }
+@media (max-width: 560px) { .cameras { padding: 0 16px 16px; } }
