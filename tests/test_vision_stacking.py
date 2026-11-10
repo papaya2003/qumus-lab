@@ -91,7 +91,9 @@ def test_drop_down_heater_keeps_boost_until_hold_now(stk):
         time.sleep(0.01)
     assert h.phase == "boost" and h.psu.set_v == 27.0       # past 170 C, still 27 V (v1)
     h.hold_now()
-    assert h.psu.set_v == 16.0 and h.phase == "hold"
+    # 16 V now; the fast demo heater may already be past target + overshoot_c, in which case the
+    # control loop cuts the output (overshoot_off) right after the switch. Both are correct.
+    assert h.psu.set_v == 16.0 and h.phase in ("hold", "overshoot_off")
     h.off("test")
 
 
