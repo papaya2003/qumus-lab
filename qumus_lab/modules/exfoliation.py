@@ -77,8 +77,55 @@ def gantry_power(ctx: ActionContext, p: dict) -> dict:
     return dev.snapshot()
 
 
+def _register_l4(module: Module) -> None:
+    from ..ops import exfoliation as ox
+
+    places = (module.config.places or {}).get("places", {})
+    left = sorted(k for k, v in places.items() if v.get("arm_left"))
+    chips = [k for k in left if places[k].get("holds") == "chip"]
+    carriers = [k for k in left if places[k].get("holds") == "carrier"]
+    place = {"type": "string", "enum": left}
+    temp = {"type": "number", "minimum": 20, "maximum": 90}
+    exf = {"target_c": dict(temp, default=22.0), "hold_v": {"type": "number"},
+           "dwell_s": {"type": "number", "minimum": 10, "maximum": 90, "default": 10.0},
+           "peel_speed": {"type": "number", "minimum": 50, "maximum": 500, "default": 500.0},
+           "rounds": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1},
+           "heat_timeout_s": {"type": "number", "minimum": 60, "maximum": 1800, "default": 900.0}}
+    L4 = "L4 (v1 molecule-level sequence; real mode needs measured points). "
+    module.add(Action("load_chip", ox.load_chip, {"place": dict(place, enum=chips), "angle_deg": {"type": "number"},
+                                                  "sample_id": {"type": "string"}}, ("place",), motion=True,
+                      description=L4 + "Chip from a board place onto the exfoliation stage."))
+    module.add(Action("load_carrier", ox.load_carrier, {"place": dict(place, enum=carriers),
+                                                        "angle_deg": {"type": "number"},
+                                                        "sample_id": {"type": "string"}}, ("place",), motion=True,
+                      description=L4 + "Crystal carrier (glass slide) onto the exfoliation stage."))
+    module.add(Action("unload_chip", ox.unload_chip, {"place": dict(place, enum=chips), "sample_id": {"type": "string"}},
+                      ("place",), motion=True, description=L4 + "Chip from the exfoliation stage to a board place."))
+    module.add(Action("unload_carrier", ox.unload_carrier, {"place": dict(place, enum=carriers),
+                                                            "sample_id": {"type": "string"}},
+                      ("place",), motion=True, description=L4 + "Carrier from the stage back to its place."))
+    module.add(Action("massage", ox.massage, {"rounds": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1}},
+                      motion=True, description=L4 + "Press the tape onto the stage (v1 massage strokes)."))
+    module.add(Action("exfoliate_on_stage", ox.exfoliate_on_stage, exf, motion=True,
+                      description=L4 + "Tape on, massage, heat cycle if below target, cool below 60 C, peel."))
+    module.add(Action("prepare_mother_tape", ox.prepare_mother_tape,
+                      {"carrier_place": dict(place, enum=carriers), "rounds": exf["rounds"],
+                       "peel_speed": exf["peel_speed"]}, ("carrier_place",), motion=True,
+                      description=L4 + "v1 mother-tape molecule: crystal from a carrier onto the tape."))
+    module.add(Action("exfoliate_chip", ox.exfoliate_chip,
+                      dict(exf, chip_place=dict(place, enum=chips), store_place=dict(place, enum=chips),
+                           angle_deg={"type": "number"}, material={"type": "string"},
+                           tape_release_deg={"type": "number", "minimum": 1, "maximum": 3600}),
+                      ("chip_place",), motion=True,
+                      description=L4 + "v1 chip-exfoliation molecule: chip on stage, exfoliate, store, new tape."))
+    module.add(Action("clear_exfoliation_stage", ox.clear_stage, motion=True,
+                      description=L4 + "Move what the ledger has on the stage to free places, park."))
+
+
 def build_exfoliation(module: Module) -> Module:
     register_common(module)
+    if {"arm_left", "tape_gantry", "tape_reels", "exfoliation_heater"} <= set(module.devices):
+        _register_l4(module)
     if "tape_gantry" in module.devices:
         module.add(Action("apply_tape", apply_tape, motion=True,
                           description="Lay the tape with the v1 arc (geometry in points.yaml; real mode needs measured)."))

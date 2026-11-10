@@ -100,6 +100,7 @@ def build_stack(config: LabConfig, *, demo: bool, modules: list[str] | None = No
     zones = ZoneRegistry(config.points.get("zones"), store, lambda *ev: zone_events.append(ev))
     for name in modules:
         mod = Module(name, config, lab.module_devices(name), demo, lab.shared, zones)
+        mod.lab_store = store
         BUILDERS[name](mod)
         svc = ContractService(mod, journal_dir=journal, store=store)
         for dev_id, dev in mod.devices.items():

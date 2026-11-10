@@ -79,6 +79,13 @@ def handle_api(svc: ContractService, method: str, path: str, query: dict, header
             except ValueError:
                 raise ApiError(400, "since must be an integer") from None
             return 200, svc.get_events(since), "application/json"
+        if path == "/api/records":
+            try:
+                since = int((query.get("since") or ["0"])[0])
+                limit = min(max(int((query.get("limit") or ["500"])[0]), 1), 2000)
+            except ValueError:
+                raise ApiError(400, "since and limit must be integers") from None
+            return 200, svc.records(since, limit), "application/json"
         m = re.match(r"^/api/images/([^/]+)$", path)
         if m:  # [Q] extension: fetch a captured image (debug page)
             image_id = m.group(1)

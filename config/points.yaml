@@ -6,6 +6,7 @@
 #
 # source: v1  -> copied from v1 (cite = file:line, check = text on that line). A starting guess only.
 #               In real mode the SafetyGate refuses go_to_point for a `source: v1` point.
+# source: sketch -> a demo-only guess (board-grid sketch), for points v1 never fixed. Refused in real mode.
 # source: measured -> measured on the lab PC at L3 (add `measured_by`, `date`). Only these may be
 #               driven to in real mode. In --demo every point may be used.
 #
@@ -45,6 +46,20 @@ points:
     slot_S12: {xyz: [320, 60, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:25", check: "(320, 60)"}}
     slot_S13: {xyz: [240, 20, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:26", check: "(240, 20)"}}
     slot_S14: {xyz: [280, 20, 15],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:27", check: "(280, 20)"}}
+    # Left board (bare chips, crystal carriers). No fixed v1 coordinates exist (v1 found them with the desk
+    # camera), so these come from the board-grid sketch: --demo only, refused in real mode until measured.
+    left_slide_1:   {xyz: [-232, 63, 15], approach_z: 30, source: sketch}
+    left_slide_2:   {xyz: [-232, 113, 15], approach_z: 30, source: sketch}
+    left_slide_3:   {xyz: [-232, 163, 15], approach_z: 30, source: sketch}
+    left_chip_1:    {xyz: [-312, 163, 15], approach_z: 30, source: sketch}
+    left_chip_2:    {xyz: [-312, 113, 15], approach_z: 30, source: sketch}
+    left_chip_3:    {xyz: [-312, 63, 15], approach_z: 30, source: sketch}
+    left_chip_4:    {xyz: [-272, 203, 15], approach_z: 30, source: sketch}
+    left_chip_5:    {xyz: [-232, 203, 15], approach_z: 30, source: sketch}
+    left_chip_6:    {xyz: [-192, 203, 15], approach_z: 30, source: sketch}
+    left_chip_7:    {xyz: [-272, 23, 15], approach_z: 30, source: sketch}
+    left_chip_8:    {xyz: [-232, 23, 15], approach_z: 30, source: sketch}
+    left_chip_9:    {xyz: [-192, 23, 15], approach_z: 30, source: sketch}
 
   arm_right:
     park:              {xyz: [0, 260, 140],  source: v1, cite: {at: "common/hardware/robot_arm_controller.py:181", check: "X0 Y260 Z140"}}
@@ -67,6 +82,20 @@ points:
     slot_S12: {xyz: [-200, 60, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:42", check: "(-200, 60)"}}
     slot_S13: {xyz: [-280, 20, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:43", check: "(-280, 20)"}}
     slot_S14: {xyz: [-240, 20, 14],  approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:44", check: "(-240, 20)"}}
+    # Right board (stamps, electrode chips): board-grid sketch, --demo only until measured (see left board).
+    right_stamp_1:  {xyz: [216.5, 187, 16], approach_z: 150, source: sketch}
+    right_stamp_2:  {xyz: [216.5, 111, 16], approach_z: 150, source: sketch}
+    right_stamp_3:  {xyz: [216.5, 72, 16], approach_z: 150, source: sketch}
+    right_stamp_4:  {xyz: [216.5, 35, 16], approach_z: 150, source: sketch}
+    right_stamp_5:  {xyz: [216.5, 150, 16], approach_z: 150, source: sketch}
+    right_chip_1:   {xyz: [318, 109, 14], approach_z: 30, source: sketch}
+    right_chip_2:   {xyz: [318, 159, 14], approach_z: 30, source: sketch}
+    right_chip_3:   {xyz: [318, 59, 14], approach_z: 30, source: sketch}
+    right_chip_4:   {xyz: [278, 199, 14], approach_z: 30, source: sketch}
+    right_chip_5:   {xyz: [278, 159, 14], approach_z: 30, source: sketch}
+    right_chip_6:   {xyz: [278, 109, 14], approach_z: 30, source: sketch}
+    right_chip_7:   {xyz: [278, 59, 14], approach_z: 30, source: sketch}
+    right_chip_8:   {xyz: [278, 19, 14], approach_z: 30, source: sketch}
 
   sample_stage:
     load:       {pos: {rail: 0.0, x: 0, y: 0}, order: [rail, x, y], source: v1,
