@@ -39,13 +39,15 @@ def test_put_records_upserts_removes_and_takes_project_lists(fast):
                        "reservations": [{"kind": "slot", "key": "mid_chip_3", "run_id": "r", "flow": "f"}]},
                       "brain", loopback=False)
     assert out["command_id"]
-    wait_for(lambda: fast.store.get_sample("flake_x"))
+    # put_records runs after the command returns: wait for its last write (the reservation)
+    wait_for(lambda: "mid_chip_3" in fast.store.reservations("slot"))
+    assert fast.store.get_sample("flake_x")
     assert fast.store.get_project("prj_1")["state"]["a"] == 1
-    assert "mid_chip_3" in fast.store.reservations("slot")
+    wait_for(lambda: not svc.state()["busy"])
     svc.command({"action": "put_records", "removed_samples": ["flake_x"],
                  "reservations": [{"kind": "slot", "key": "mid_chip_3", "released": True}]}, "brain", loopback=False)
-    wait_for(lambda: fast.store.get_sample("flake_x") is None)
-    assert "mid_chip_3" not in fast.store.reservations("slot")
+    wait_for(lambda: "mid_chip_3" not in fast.store.reservations("slot"))
+    assert fast.store.get_sample("flake_x") is None
     rows = [c for c in fast.store.changes(0, 2000)["changes"] if c["key"] == "flake_x"]
     assert rows[-1]["row"] is None
 
