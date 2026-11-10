@@ -188,9 +188,12 @@ def main(argv: list[str] | None = None) -> int:
         if n:
             logging.info("demo bench: %d starting samples written to the ledger", n)
     servers = []
+    from .service.contract2 import Station
+
+    station = Station(stack.services)  # contract 2 next to v1 on every module port
     for name, svc in stack.services.items():
         port = int(config.module(name).get("port", 0))
-        srv = make_server(args.host, port, service=svc)
+        srv = make_server(args.host, port, service=svc, station=station)
         serve_in_thread(srv)
         servers.append(srv)
         logging.info("%s service on http://%s:%d  (%s)", name, args.host, port, "DEMO" if args.demo else "REAL")

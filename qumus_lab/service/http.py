@@ -8,6 +8,9 @@ page server. The module ports 8781/8782 are the agent's ports and are reached th
 tunnelled request arrives from 127.0.0.1, so on those ports the client address proves nothing and every
 caller is treated as remote. Never tunnel the debug page port.
 Errors are ``{"error": "..."}`` with 400 / 403 / 404 / 409 / 415 / 503 (ADR 0001).
+
+Contract 2 (service/contract2.py) is served next to v1 on the module ports when ``make_server`` gets a
+``station``: ``GET /api/station`` and ``/<module>/api/...``, with the same rule on who is local.
 """
 
 from __future__ import annotations
@@ -134,6 +137,7 @@ class _Handler(BaseHTTPRequestHandler):
     single: ContractService | None = None
     serve_web = False
     trust_loopback = False
+    station = None  # contract 2 (service/contract2.py Station) on the module ports
 
     def log_message(self, fmt, *args):  # quiet; events go to the journal
         pass
@@ -152,6 +156,10 @@ class _Handler(BaseHTTPRequestHandler):
         path, query = url.path, parse_qs(url.query)
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
+        if self.station is not None and self.station.owns(path):
+            loopback = self.trust_loopback and is_loopback(self.client_address[0])
+            status, payload = self.station.handle(method, path, query, self.headers, body, loopback)
+            return self._send(status, payload)
         try:
             svc = self.single
             if svc is None:
@@ -191,14 +199,18 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         self._dispatch("POST")
 
+    def do_DELETE(self):  # noqa: N802
+        self._dispatch("DELETE")
+
 
 def make_server(host: str, port: int, *, service: ContractService | None = None,
                 services: dict[str, ContractService] | None = None, web: bool = False,
-                trust_loopback: bool | None = None) -> ThreadingHTTPServer:
-    """``trust_loopback`` defaults to True only for the debug page server (``web=True``)."""
+                trust_loopback: bool | None = None, station=None) -> ThreadingHTTPServer:
+    """``trust_loopback`` defaults to True only for the debug page server (``web=True``).
+    ``station``: also serve contract 2 (service/contract2.py) on this port."""
     trust = web if trust_loopback is None else bool(trust_loopback)
     handler = type("Handler", (_Handler,), {"single": service, "services": dict(services or {}), "serve_web": web,
-                                            "trust_loopback": trust})
+                                            "trust_loopback": trust, "station": station})
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv

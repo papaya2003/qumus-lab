@@ -11,6 +11,31 @@ one independent service.
 | stacking | `http://127.0.0.1:8782/api/` |
 | debug page (both, same API) | `http://127.0.0.1:8780/m/<module>/api/` |
 
+## Contract 2 (next to v1)
+
+Contract 2 (papaya2003/lab-contract `spec/contract-2.md`, decision 0008, approved by Jialei) is served
+next to the v1 routes by `qumus_lab/service/contract2.py` on both module ports (8781, 8782). The modules of
+one qumus-lab process are one **station**:
+
+| Route | Meaning |
+|---|---|
+| `GET /api/station` | entry: services `exfoliation/`, `stacking/`, `boot_id` |
+| `GET /<module>/api/describe` | command specs (units, `deadline_s`, `lease`, `hazard`, ...), `lease.duration_s`, `orphan_timeout_s` |
+| `GET /<module>/api/state` | flat state; devices, zones and jobs under `readings` |
+| `GET /<module>/api/events?since=&limit=` | events with `kind` |
+| `POST`/`DELETE /<module>/api/lease` | take or renew (`renew_only: true`) / release |
+| `POST /<module>/api/command` | `{command_id, action, params, deadline_s?}`; 202, duplicate, `id_reused` |
+| `GET /<module>/api/commands/<id>` | command record (last 500 of this boot) |
+| `GET /<module>/api/jobs/<run_id>` | jobs profile (the same run store as `/api/records`) |
+| `POST /<module>/api/stop` | any client, no lease; `{wait_s, heat_off?}` |
+
+Header `X-Lab-Client`; errors `{"error": {code, message, retry}}`. Who is local is decided as for v1: the
+module ports never trust loopback, so `local_only` commands answer 403 `local_only` there. `heat` and
+`set_initial_temp` are listed as motion with hazard `heat`; jobs as motion with a 48 h deadline. Records and
+`put_records` stay on v1 until the contract 2 records profile. Check a running lab (demo only) with
+lab-contract's `python -m conformance --demo http://127.0.0.1:8782/`; `tests/test_contract2.py` runs it when
+a lab-contract checkout is found (beside this repository or `LAB_CONTRACT`).
+
 ## Rules
 
 - **One commander at a time.** A client takes the lease with `POST heartbeat` and keeps it by
