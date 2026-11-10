@@ -234,6 +234,30 @@ class Window:
         if not isinstance(params, dict):
             raise Refusal("bad_params", "params must be an object ({} when none)")
         digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        # check everything first (no side effects), then look up and reserve the id in one lock
+        # section, so two requests with the same new command_id never both run
+        refusal, deadline_s, spec = None, body.get("deadline_s"), {}
+        act = self.service.module.actions.get(action)
+        if act is None:
+            refusal = Refusal("unknown_action", f"no command {action!r}")
+        else:
+            spec = self.command_spec(act)
+            unknown = sorted(set(params) - set(spec["params"].get("properties", {})))
+            limit = spec.get("deadline_s", {}).get("maximum")
+            if unknown:
+                refusal = Refusal("bad_params", f"unknown params {unknown}")
+            elif deadline_s is not None and (
+                    not isinstance(deadline_s, int | float) or isinstance(deadline_s, bool)
+                    or deadline_s <= 0 or (limit is not None and deadline_s > limit)):
+                refusal = Refusal("bad_params", f"deadline_s must be > 0 and <= {limit}")
+            elif deadline_s is None and "deadline_s" in spec:
+                deadline_s = spec["deadline_s"]["default"]
+        now = time.time()
+        with self.service.lock:
+            since = self.service.seq
+        record = {"id": cid, "action": str(action), "client": client, "params": params,
+                  "result": None, "message": "", "accepted_unix": now, "finished_unix": None,
+                  "data": {}, "boot_id": self.station.boot_id, "_since": since}
         with self.lock:
             if cid in self.bodies:
                 if self.bodies[cid] != digest:
@@ -241,32 +265,12 @@ class Window:
                 rec = self.records[cid]
                 return 200, {"command_id": cid, "accepted_unix": rec["accepted_unix"],
                              "seq": self.service.seq, "duplicate": True}
-        act = self.service.module.actions.get(action)
-        if act is None:
-            return self._reject(cid, digest, client, action, params,
-                                Refusal("unknown_action", f"no command {action!r}"))
-        spec = self.command_spec(act)
-        unknown = sorted(set(params) - set(spec["params"].get("properties", {})))
-        if unknown:
-            return self._reject(cid, digest, client, action, params,
-                                Refusal("bad_params", f"unknown params {unknown}"))
-        deadline_s = body.get("deadline_s")
-        if deadline_s is not None:
-            limit = spec.get("deadline_s", {}).get("maximum")
-            if (not isinstance(deadline_s, int | float) or isinstance(deadline_s, bool)
-                    or deadline_s <= 0 or (limit is not None and deadline_s > limit)):
-                return self._reject(cid, digest, client, action, params,
-                                    Refusal("bad_params", f"deadline_s must be > 0 and <= {limit}"))
-        elif "deadline_s" in spec:
-            deadline_s = spec["deadline_s"]["default"]
-        now = time.time()
-        with self.service.lock:
-            since = self.service.seq
-        record = {"id": cid, "action": action, "client": client, "params": params, "result": None,
-                  "message": "", "accepted_unix": now, "finished_unix": None, "data": {},
-                  "boot_id": self.station.boot_id, "_since": since}
-        with self.lock:
+            if refusal is not None:
+                record.update(result="rejected", message=refusal.message, finished_unix=now,
+                              _since=0)
             self._remember(cid, digest, record)
+        if refusal is not None:
+            raise refusal
         try:
             out = self.service.command({"action": action, "command_id": cid, **params}, client, loopback)
         except ApiError as e:
@@ -281,16 +285,6 @@ class Window:
         elif deadline_s:
             self._deadline(record, float(deadline_s))
         return 202, {"command_id": cid, "accepted_unix": now, "seq": self.service.seq}
-
-    def _reject(self, cid: str, digest: str, client: str, action: Any, params: Any,
-                refusal: Refusal) -> tuple[int, dict]:
-        now = time.time()
-        with self.lock:
-            self._remember(cid, digest, {
-                "id": cid, "action": str(action), "client": client, "params": params,
-                "result": "rejected", "message": refusal.message, "accepted_unix": now,
-                "finished_unix": now, "data": {}, "boot_id": self.station.boot_id, "_since": 0})
-        raise refusal
 
     def _remember(self, cid: str, digest: str, record: dict[str, Any]) -> None:
         self.records[cid] = record
