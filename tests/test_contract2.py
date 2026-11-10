@@ -197,3 +197,41 @@ def test_lab_contract_conformance(ports):
     report = v2.run(urls["stacking"] + "/", demo=True, timeout_s=10.0)
     assert len(report.results) >= 16
     assert report.passed, [r for r in report.results if not r.ok]
+
+
+def test_one_new_command_id_runs_once_under_concurrent_requests(ports, stack):
+    """Two requests with the same new command_id at once: one 202, the other a duplicate."""
+    import threading
+
+    urls, station = ports
+    h = Http2(urls["stacking"])
+    action = stack.services["stacking"].module.actions["read_all"]
+    real, runs = action.fn, []
+    window, spec = station.windows["stacking"], station.windows["stacking"].command_spec
+
+    def slow_spec(act):  # widen the gap between looking up the id and reserving it
+        time.sleep(0.05)
+        return spec(act)
+
+    window.command_spec = slow_spec
+
+    def counted(ctx, params):
+        runs.append(1)
+        return real(ctx, params)
+
+    action.fn = counted
+    body = {"command_id": "race-1", "action": "read_all", "params": {}}
+    answers: list[int] = []
+    gate = threading.Barrier(8)
+
+    def send():
+        gate.wait()
+        answers.append(h.post("/stacking/api/command", body)[0])
+
+    threads = [threading.Thread(target=send) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert record(h, "stacking", "race-1")["result"] == "ok"
+    assert sorted(answers) == [200] * 7 + [202] and len(runs) == 1
