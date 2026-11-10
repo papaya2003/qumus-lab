@@ -12,9 +12,10 @@
  +-----------------------------------+----------------------------------------------+
                                      | action name + params
  +-----------------------------------v----------------------------------------------+
- | Module actions: read_all, read, home_query, go_to_point, jog, set_switch, heat,   |
- | heat_off, capture, arm_suction, rotate_nozzle; exfoliation: apply_tape,           |
- | peel_tape, advance_tape, gantry_power; stacking: set_objective, focus_by          |
+ | Module actions: read_all, read, home_query, go_to_point, jog, move_axis,          |
+ | set_switch, heat, heat_off, capture, arm_suction, rotate_nozzle; exfoliation:     |
+ | apply_tape, peel_tape, advance_tape, gantry_power; stacking: set_objective,       |
+ | focus_by                                                                          |
  |        every action -> SafetyGate (limits.yaml, points.yaml, demo/real)           |
  +-----------------------------------+----------------------------------------------+
                                      | generic operations

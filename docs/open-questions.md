@@ -70,7 +70,7 @@ Found in the 11-08 safety self-review and not changed (see `tests/test_fault_inj
 
 20. **Both modules in one process** (shared supply on COM8, Windows COM ports are exclusive). Each
     module still has its own port, lease and lock. OK, or should the supply move to its own service?
-21. **`set_switch` and `jog` are local only** (probe and debug page on the lab PC), with switches
+21. **`set_switch`, `jog` and `move_axis` are local only** (probe and debug page on the lab PC), with switches
     turning off after <= 10 s. The agent will need L3 actions that hold vacuum for minutes; they come
     after the bench is measured.
 22. **Middle-board lock** covers the slot points S1-S14 of both arms (`config/points.yaml` `zones:`).

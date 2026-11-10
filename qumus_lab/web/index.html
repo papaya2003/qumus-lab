@@ -19,15 +19,10 @@
   </div>
 </header>
 
-<main id="bench" class="bench" aria-live="polite"></main>
-
-<section class="cameras" aria-label="Cameras">
-  <div class="events-head">
-    <h2>Cameras</h2>
-    <label class="muted"><input type="checkbox" id="camlive"> Live pictures (about 2 per second, not saved)</label>
-  </div>
-  <div id="camgrid" class="camgrid"></div>
-</section>
+<div class="layout">
+  <nav class="modnav" aria-label="Modules"><ul id="modnav"></ul></nav>
+  <main id="bench" class="bench" aria-live="polite"></main>
+</div>
 
 <section class="events" aria-label="Events">
   <div class="events-head">
@@ -56,6 +51,7 @@
       <button type="button" class="go">Go</button>
       <span class="muted hint">Real mode: only measured points move.</span>
     </div>
+    <p class="muted howto">Jog buttons: click for one step, hold to keep stepping (stops when you let go, at most 20 steps per hold). "Move to" takes a typed position.</p>
     <div class="devices"></div>
   </section>
 </template>

@@ -215,7 +215,7 @@ class Camera(Device):
         self.size = (None, None)
         self.last_capture_unix: float | None = None
         self._cam_lock = threading.Lock()
-        self.live = LivePreview(self, fps=float(cfg.get("preview_fps", 2.0)),
+        self.live = LivePreview(self, fps=float(cfg.get("preview_fps", 5.0)),
                                 max_width=int(cfg.get("preview_max_width", 960)),
                                 quality=int(cfg.get("preview_quality", 70)))
 

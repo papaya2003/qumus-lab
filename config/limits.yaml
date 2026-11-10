@@ -18,7 +18,15 @@ probe:
   gantry_jog_max_mm: 0.5
   focus_jog_max_um: 50
   reel_jog_max_deg: 10
-  jog_feed_mm_min: 300          # arm / gantry feed used by jog
+  jog_feed_mm_min: 300          # arm / gantry feed used by jog and move_axis
+  # move_axis (debug page "move to"): how far from the position just read one typed target may be.
+  # Stamp z and arm z down (while min_z_mm is null) keep the jog cap above.
+  arm_target_max_mm: 10
+  stage_target_max_mm: 10
+  gantry_target_max_mm: 10
+  stamp_target_max_mm: 1        # stamp x / y
+  stamp_rail_target_max_mm: 10
+  focus_target_max_um: 500
   switch_auto_off_max_s: 10
   first_heat_max_c: 40
   heat_max_volts: 6.5           # v1 approved pair 30 C -> 6.5 V (exfoliation_setpoints.py:8)

@@ -30,7 +30,15 @@ column heads). Barlow's grotesque comes from road signage, which suits a control
 `font-variant-numeric: tabular-nums` instead of a monospace face. System fonts are the fallback when the
 lab PC is offline.
 
-Layout: the page is the bench seen from above. Exfoliation is the left column and stacking the right
+Layout (changed 11-09, Jialei): one module at a time. A left column lists Exfoliation and Stacking with
+their state (Ready / Busy / Locked); the chosen module fills the main area (also in the address, `#stacking`).
+Each camera row shows its live picture under its controls (about 5 per second while the module is on
+screen; "Live" turns it off). Jog buttons step once on a click and keep stepping while held (each step is
+an ordinary capped jog, sent only after the last one finished; at most 20 steps per hold, so a mouse-up
+lost over a remote desktop cannot keep an axis going). "Move to" sends `move_axis` with a typed target
+after a confirm dialog. The original layout follows.
+
+Original layout (11-08): the page is the bench seen from above. Exfoliation is the left column and stacking the right
 column, as on the real table. Devices are rows separated by hairlines inside each column (no card grid),
 each row = name + connection dot + readouts + the controls that fit that kind of device. The event log
 sits under both columns. One sticky e-stop band runs along the bottom edge.

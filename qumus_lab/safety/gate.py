@@ -5,8 +5,11 @@ module runs in --demo. It returns the *resolved* plan values (e.g. which heat mo
 action cannot drift from what was checked.
 
 Rules (contract v1 + brief B):
-- local_only actions (jog, raw switch) only from loopback; caps: arm/stage/gantry 0.5 mm, stamp 0.1 mm,
-  focus 50 um, switches auto-off <= 10 s, first heat <= 40 C.
+- local_only actions (jog, move_axis, raw switch) only from loopback; caps: arm/stage/gantry 0.5 mm, stamp
+  0.1 mm, focus 50 um, switches auto-off <= 10 s, first heat <= 40 C.
+- move_axis (type a target on the debug page): one axis, at most `*_target_max_*` away from the position just
+  read (arm/stage/gantry/stamp rail 10 mm, stamp x/y 1 mm, focus 500 um). Stamp z and arm z *down* keep the jog cap
+  while the arm's min_z is not in limits.yaml: a crash there cannot be stopped in software.
 - real mode: go_to_point needs a `source: measured` point (v1 numbers are starting guesses only);
   heating a heater whose limits are not measured is capped like the first heat.
 - feeds never above the arm's max feed; axis targets inside their ranges.
@@ -85,6 +88,38 @@ class SafetyGate:
         if abs(amount) > cap:
             unit = "um" if kind == "focus" else ("deg" if kind == "tape_reels" else "mm")
             raise Rejected(f"jog {amount} {unit} is above the cap {cap} {unit} for {device}")
+        return cap
+
+    def check_target_move(self, kind: str, device: str, axis: str, current: float, target: float) -> float:
+        """move_axis: distance from the position just read must be within the per-kind cap. Returns the cap."""
+        if not (math.isfinite(current) and math.isfinite(target)):
+            raise Rejected("current position and target must be numbers")
+        dist = target - current
+        caps = {
+            "arm": ("arm_target_max_mm", 10.0),
+            "stage": ("stage_target_max_mm", 10.0),
+            "manipulator": ("stamp_target_max_mm", 1.0),
+            "gantry": ("gantry_target_max_mm", 10.0),
+            "focus": ("focus_target_max_um", 500.0),
+        }
+        if kind not in caps:
+            raise Rejected(f"{device} ({kind}) cannot be moved to a typed target")
+        key, default = caps[kind]
+        cap = float(self.probe.get(key, default))
+        why = ""
+        if kind == "manipulator" and axis == "rail":
+            cap = float(self.probe.get("stamp_rail_target_max_mm", 10.0))
+        elif kind == "manipulator" and axis == "z":
+            cap, why = min(cap, float(self.probe.get("stamp_jog_max_mm", 0.1))), " (stamp z: jog cap, to protect the stamp)"
+        elif kind == "arm" and axis == "z" and dist < 0:
+            min_z = self.limits.get("arms", {}).get(device, {}).get("min_z_mm")
+            if min_z is None:
+                cap = min(cap, float(self.probe.get("arm_jog_max_mm", 0.5)))
+                why = " (arm z down: jog cap until min_z_mm is measured in limits.yaml)"
+        unit = "um" if kind == "focus" else "mm"
+        if abs(dist) > cap + 1e-9:
+            raise Rejected(f"{device}.{axis}: {current:.4g} -> {target:.4g} {unit} is {abs(dist):.4g} {unit}, "
+                           f"above the cap {cap:g} {unit}{why}")
         return cap
 
     def check_axis_target(self, device: str, axis: str, target: float, *, for_point: bool) -> None:

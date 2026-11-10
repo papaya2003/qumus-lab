@@ -106,7 +106,9 @@ def test_debug_page_shows_the_cameras(stack):
         assert status == 200 and data.startswith(b"\x89PNG")
         assert _req(port, "GET", "/cam/nope")[0] == 404
         page = _req(port, "GET", "/")[2]
-        assert b'id="camgrid"' in page
+        assert b'id="modnav"' in page  # module switcher; each camera row shows its live picture
+        script = _req(port, "GET", "/app.js")[2]
+        assert b"/cam/${id}" in script and b"move_axis" in script
     finally:
         srv.shutdown()
         srv.server_close()
