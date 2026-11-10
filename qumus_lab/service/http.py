@@ -2,6 +2,11 @@
 
 One server per module (default 127.0.0.1:8781 exfoliation, 8782 stacking), plus the debug page server
 (8780) that serves the page and forwards ``/m/<module>/api/...`` to the same service objects in-process.
+
+Who counts as "local" (may send ``local_only`` actions and ``unlock``): only a loopback client of the debug
+page server. The module ports 8781/8782 are the agent's ports and are reached through SSH tunnels; a
+tunnelled request arrives from 127.0.0.1, so on those ports the client address proves nothing and every
+caller is treated as remote. Never tunnel the debug page port.
 Errors are ``{"error": "..."}`` with 400 / 403 / 404 / 409 / 415 / 503 (ADR 0001).
 """
 
@@ -57,9 +62,12 @@ def camera_frame(services: dict[str, ContractService], cam_id: str) -> tuple[int
 
 
 def handle_api(svc: ContractService, method: str, path: str, query: dict, headers, body: bytes,
-               client_addr: str) -> tuple[int, dict | bytes, str]:
-    """Route one contract request. Returns (status, json-or-bytes, content type)."""
-    loopback = is_loopback(client_addr)
+               client_addr: str, trust_loopback: bool = True) -> tuple[int, dict | bytes, str]:
+    """Route one contract request. Returns (status, json-or-bytes, content type).
+
+    ``trust_loopback`` False (module ports): a loopback address does not make the caller local.
+    """
+    loopback = trust_loopback and is_loopback(client_addr)
     if method == "GET":
         if path == "/api/describe":
             return 200, svc.describe(), "application/json"
@@ -118,6 +126,7 @@ class _Handler(BaseHTTPRequestHandler):
     services: dict[str, ContractService] = {}
     single: ContractService | None = None
     serve_web = False
+    trust_loopback = False
 
     def log_message(self, fmt, *args):  # quiet; events go to the journal
         pass
@@ -146,7 +155,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._static(path)
                 else:
                     raise ApiError(404, f"no route {method} {path}")
-            status, payload, ctype = handle_api(svc, method, path, query, self.headers, body, self.client_address[0])
+            status, payload, ctype = handle_api(svc, method, path, query, self.headers, body, self.client_address[0],
+                                             self.trust_loopback)
             self._send(status, payload, ctype)
         except ApiError as exc:
             self._send(exc.status, {"error": exc.message})
@@ -176,8 +186,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(host: str, port: int, *, service: ContractService | None = None,
-                services: dict[str, ContractService] | None = None, web: bool = False) -> ThreadingHTTPServer:
-    handler = type("Handler", (_Handler,), {"single": service, "services": dict(services or {}), "serve_web": web})
+                services: dict[str, ContractService] | None = None, web: bool = False,
+                trust_loopback: bool | None = None) -> ThreadingHTTPServer:
+    """``trust_loopback`` defaults to True only for the debug page server (``web=True``)."""
+    trust = web if trust_loopback is None else bool(trust_loopback)
+    handler = type("Handler", (_Handler,), {"single": service, "services": dict(services or {}), "serve_web": web,
+                                            "trust_loopback": trust})
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv

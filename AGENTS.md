@@ -30,6 +30,8 @@ scripts\update.bat                          :: on main only: pull, self-check, r
 Remote access: control only through the debug page on this PC (127.0.0.1:8780). The view-only page
 (port 8790) must never get a control route (POST, commands, stop, lease, unlock); `tests/test_remote.py`
 checks this. Do not bind the module services or the debug page to anything but loopback.
+Never tunnel or forward the debug page port 8780: the module ports treat every caller as remote,
+the debug page trusts loopback (see docs/contract.md).
 
 Real instruments: `scripts\probe.bat ...` and `scripts\start-lab.bat` (see the guide).
 
