@@ -71,7 +71,7 @@ refusal comes back at once.
 | Status | When |
 | --- | --- |
 | 400 | bad JSON, unknown action, missing or out-of-range parameter, a SafetyGate cap |
-| 403 | a `local_only` action or `unlock` from a non-loopback address |
+| 403 | a `local_only` action or `unlock` on a module port (8781/8782, any address) or from a non-loopback address on the debug page port |
 | 404 | no such route or image |
 | 409 | no lease, lease held by someone else, busy, locked, unmeasured point in real mode, power supply owned by the other heater, zone held by the other arm or not taken |
 | 415 | POST without `Content-Type: application/json` |
@@ -82,7 +82,10 @@ The brief mentioned `422` for bad parameters; the shared ADR says `400`, and we 
 ## Actions
 
 Flags: **M** motion (stopped on lease expiry and by `stop`), **A** any client (no lease needed),
-**L** local only (loopback clients: the probe and the debug page on the lab PC).
+**L** local only (the probe, and loopback clients of the debug page 8780 on the lab PC). The module
+ports 8781/8782 refuse **L** actions and `unlock` from every address, 127.0.0.1 included: the brain
+reaches them through an SSH tunnel, and a tunnelled request arrives from 127.0.0.1, so there the address
+proves nothing. Tunnel only 8781/8782, never 8780.
 
 Both modules:
 
