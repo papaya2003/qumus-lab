@@ -59,6 +59,8 @@ class Action:
     any_client: bool = False
     allowed_when_locked: bool = False  # heat_off: switching heat off must work while the module is locked
     concurrent: bool = False
+    #: a whole job (L5 flow): accepted at once with a run_id, then runs in the module's job worker
+    job: bool = False
     description: str = ""
     #: synchronous gate checks (no I/O) run before the command is accepted, so caps fail with 400 at once
     precheck: Callable[[Module, dict], None] | None = None
@@ -70,7 +72,7 @@ class Action:
     def describe(self) -> dict:
         return {"params": self.schema(), "any_client": self.any_client, "motion": self.motion,
                 "local_only": self.local_only, "allowed_when_locked": self.allowed_when_locked,
-                "description": self.description}
+                "job": self.job, "description": self.description}
 
     def validate(self, params: dict) -> dict:
         out = {}
@@ -95,6 +97,8 @@ def _check_type(action: str, key: str, val: Any, spec: dict) -> Any:
         "boolean": isinstance(val, bool),
         "integer": isinstance(val, int) and not isinstance(val, bool),
         "number": isinstance(val, int | float) and not isinstance(val, bool) and math.isfinite(float(val)),
+        "object": val is None or isinstance(val, dict),
+        "array": isinstance(val, list),
     }.get(t, True)
     if not ok:
         raise Rejected(f"{action}: param {key!r} must be {t}")
@@ -120,6 +124,9 @@ class Module:
         self.gate = SafetyGate(config, name, demo)
         self.actions: dict[str, Action] = {}
         self._switch_timers: dict[str, threading.Timer] = {}
+        self.lab_store = None  # qumus.db (set by the launcher); L4 operations keep the sample ledger in it
+        self.time_scale = 1.0  # --demo: v1 waits inside L4 operations run this many times faster
+        self.world = None      # --demo only: the SimWorld (never used by operations, only by tests)
         #: set by the service: lock the module (code, message) when an off can not be confirmed
         self.on_fault: Callable[[str, str], None] | None = None
 

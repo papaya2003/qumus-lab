@@ -1,0 +1,53 @@
+# Place names: the vocabulary jobs, samples and the brain use for where an object is (the same names as
+# the simulated lab's hallbar-linked bench, so the brain sees no difference). Each place says which arm
+# point(s) reach it (points.yaml). mid_chip_N = the v1 middle-board slot S<N>, reachable by both arms.
+
+version: 1
+
+places:
+  left_slide_1:    {station: left_storage, holds: carrier, arm_left: left_slide_1}
+  left_slide_2:    {station: left_storage, holds: carrier, arm_left: left_slide_2}
+  left_slide_3:    {station: left_storage, holds: carrier, arm_left: left_slide_3}
+  left_chip_1:     {station: left_storage, holds: chip, arm_left: left_chip_1}
+  left_chip_2:     {station: left_storage, holds: chip, arm_left: left_chip_2}
+  left_chip_3:     {station: left_storage, holds: chip, arm_left: left_chip_3}
+  left_chip_4:     {station: left_storage, holds: chip, arm_left: left_chip_4}
+  left_chip_5:     {station: left_storage, holds: chip, arm_left: left_chip_5}
+  left_chip_6:     {station: left_storage, holds: chip, arm_left: left_chip_6}
+  left_chip_7:     {station: left_storage, holds: chip, arm_left: left_chip_7}
+  left_chip_8:     {station: left_storage, holds: chip, arm_left: left_chip_8}
+  left_chip_9:     {station: left_storage, holds: chip, arm_left: left_chip_9}
+  mid_chip_1:      {station: middle_storage, holds: chip, arm_left: slot_S1, arm_right: slot_S1, label: S1}
+  mid_chip_2:      {station: middle_storage, holds: chip, arm_left: slot_S2, arm_right: slot_S2, label: S2}
+  mid_chip_3:      {station: middle_storage, holds: chip, arm_left: slot_S3, arm_right: slot_S3, label: S3}
+  mid_chip_4:      {station: middle_storage, holds: chip, arm_left: slot_S4, arm_right: slot_S4, label: S4}
+  mid_chip_5:      {station: middle_storage, holds: chip, arm_left: slot_S5, arm_right: slot_S5, label: S5}
+  mid_chip_6:      {station: middle_storage, holds: chip, arm_left: slot_S6, arm_right: slot_S6, label: S6}
+  mid_chip_7:      {station: middle_storage, holds: chip, arm_left: slot_S7, arm_right: slot_S7, label: S7}
+  mid_chip_8:      {station: middle_storage, holds: chip, arm_left: slot_S8, arm_right: slot_S8, label: S8}
+  mid_chip_9:      {station: middle_storage, holds: chip, arm_left: slot_S9, arm_right: slot_S9, label: S9}
+  mid_chip_10:     {station: middle_storage, holds: chip, arm_left: slot_S10, arm_right: slot_S10, label: S10}
+  mid_chip_11:     {station: middle_storage, holds: chip, arm_left: slot_S11, arm_right: slot_S11, label: S11}
+  mid_chip_12:     {station: middle_storage, holds: chip, arm_left: slot_S12, arm_right: slot_S12, label: S12}
+  mid_chip_13:     {station: middle_storage, holds: chip, arm_left: slot_S13, arm_right: slot_S13, label: S13}
+  mid_chip_14:     {station: middle_storage, holds: chip, arm_left: slot_S14, arm_right: slot_S14, label: S14}
+  right_stamp_1:   {station: right_storage, holds: stamp, arm_right: right_stamp_1}
+  right_stamp_2:   {station: right_storage, holds: stamp, arm_right: right_stamp_2}
+  right_stamp_3:   {station: right_storage, holds: stamp, arm_right: right_stamp_3}
+  right_stamp_4:   {station: right_storage, holds: stamp, arm_right: right_stamp_4}
+  right_stamp_5:   {station: right_storage, holds: stamp, arm_right: right_stamp_5}
+  right_chip_1:    {station: right_storage, holds: chip, arm_right: right_chip_1}
+  right_chip_2:    {station: right_storage, holds: chip, arm_right: right_chip_2}
+  right_chip_3:    {station: right_storage, holds: chip, arm_right: right_chip_3}
+  right_chip_4:    {station: right_storage, holds: chip, arm_right: right_chip_4}
+  right_chip_5:    {station: right_storage, holds: chip, arm_right: right_chip_5}
+  right_chip_6:    {station: right_storage, holds: chip, arm_right: right_chip_6}
+  right_chip_7:    {station: right_storage, holds: chip, arm_right: right_chip_7}
+  right_chip_8:    {station: right_storage, holds: chip, arm_right: right_chip_8}
+
+# Work places that are not storage slots (one object at a time).
+stations:
+  exfoliation_stage: {module: exfoliation, holds: [chip, carrier]}
+  transfer_stage:    {module: stacking, holds: [chip], scan_area_mm: [8.0, 6.0]}   # scan_area: sketch (chip minus 1 mm)
+  stamp_holder:      {module: stacking, holds: [stamp]}
+  tape:              {module: exfoliation, holds: [tape]}

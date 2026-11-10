@@ -78,9 +78,22 @@ Dracal CLI, and synthetic camera frames. The same emulators drive the tests.
 the services write it after every command. The middle-board occupancy lock lets one arm at a time into the
 middle board. Details: [lab-state.md](lab-state.md).
 
-## Not done tonight (next steps)
+## L4 / L5 / L6 (11-10)
 
-- Restart reconciliation of the stored state, and sample writes from L4 actions.
-- L3+ actions (pick chip, place chip, stamp load, massage) composed from the generic operations once
-  points are measured.
-- Recognition and the two-camera check.
+```
+ L6  qumus_lab/hallbar_script.py   scripted Hall bar, HTTP only (runs on any computer)
+ L5  qumus_lab/flows               job actions with the sim lab's names; run/step rows in qumus.db
+ L4  qumus_lab/ops                 v1 molecule sequences (exfoliation.py, stacking.py, common.py)
+     qumus_lab/vision              v1 touch / contact checks (ported), placeholder flake detector
+     qumus_lab/jobs                job queue + checkpoints (JobContext.step)
+```
+
+In `--demo` the microscope frames come from `qumus_lab/sim/optics.py`: a hidden world of chips, flakes
+and stamps drawn from the simulated device positions, so the L4 vision runs on pictures, as on the real
+bench. Details and what is not done: [l4-l6.zh.md](l4-l6.zh.md), [vision.md](vision.md).
+
+## Not done yet (next steps)
+
+- Restart reconciliation of the stored state.
+- Corner detection and design-based drop targets (the drop point is "mm from the chip centre" for now).
+- The real flake detector (Edward) and the two-camera bench check.

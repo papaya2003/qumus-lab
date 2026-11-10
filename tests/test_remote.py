@@ -71,7 +71,10 @@ def test_viewer_shows_three_cameras_and_readings(viewer):
     assert {c["id"] for c in cams} == CAMS
     for cid in CAMS:
         status, headers, data = _req(port, "GET", f"/cam/{cid}", cookie=cookie)
-        assert status == 200 and headers["Content-Type"] == "image/png" and data.startswith(b"\x89PNG")
+        # desk cameras: PNG markers; the --demo microscope: rendered JPEG frames
+        assert status == 200 and (
+            (headers["Content-Type"] == "image/png" and data.startswith(b"\x89PNG"))
+            or (headers["Content-Type"] == "image/jpeg" and data.startswith(b"\xff\xd8")))
     status_doc = json.loads(_req(port, "GET", "/status.json", cookie=cookie)[2])
     assert set(status_doc["modules"]) == {"exfoliation", "stacking"}
     assert "arm_left" in status_doc["modules"]["exfoliation"]["devices"]
@@ -102,8 +105,8 @@ def test_debug_page_shows_the_cameras(stack):
         port = srv.server_address[1]
         cams = json.loads(_req(port, "GET", "/cameras.json")[2])["cameras"]
         assert {c["id"] for c in cams} == CAMS
-        status, _, data = _req(port, "GET", "/cam/microscope_camera")
-        assert status == 200 and data.startswith(b"\x89PNG")
+        status, headers, data = _req(port, "GET", "/cam/microscope_camera")
+        assert status == 200 and (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG"))  # JPEG with opencv
         assert _req(port, "GET", "/cam/nope")[0] == 404
         page = _req(port, "GET", "/")[2]
         assert b'id="modnav"' in page  # module switcher; each camera row shows its live picture

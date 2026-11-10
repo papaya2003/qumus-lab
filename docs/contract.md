@@ -120,7 +120,48 @@ Exfoliation only: `apply_tape` (M), `peel_tape {speed}` (M, 50 to 500 mm/min), `
 Stacking only: `set_objective {objective: 5|10|20|100}` (M), `focus_by {um}` (M, real-mode cap 50 um
 before L3).
 
+L4 actions (single v1 molecule-level sequences; real mode needs measured points, see
+[l4-l6.zh.md](l4-l6.zh.md)), all **M**:
+
+- exfoliation: `load_chip`, `load_carrier`, `unload_chip`, `unload_carrier`, `massage`,
+  `exfoliate_on_stage`, `prepare_mother_tape`, `exfoliate_chip`, `clear_exfoliation_stage`
+- stacking: `place_chip_on_stage`, `store_chip`, `load_stamp`, `initialize_stamp`, `remove_stamp`,
+  `recycle_stamp`, `set_initial_temp`, `adjust_touching_point`, `pick_up`, `drop_down`, `scan_chip`,
+  `revisit_flake`, `go_to_flake`, `go_to_target`, `check_pickup`, `record_device`; `transfer_heat_off`
+
+L5 jobs (whole flows, `"job": true` in describe; names and parameters of the simulated lab):
+
+| Module | Jobs |
+| --- | --- |
+| exfoliation | `exfoliate_chips`, `cool_experiment_stages`, `inspect_bench` |
+| stacking | `place_chip_on_transfer_stage`, `search_chip`, `revisit_chip`, `stack_device`, `cool_experiment_stages`, `inspect_bench` |
+
+- A job command answers `202 {command_id, run_id, result: {run_id, flow}, state}` at once;
+  `last_command.data.run_id` holds the same id. The run row is in `GET records` from that moment.
+- One motion job or command at a time per module; more jobs queue (run status `queued`). `stop` and
+  lease expiry cancel the running job at its next check and the queued ones.
+- `job_status {run_id}` (A) → `{run_id, flow, status, done, result, error, workflow, steps, module}`;
+  `job_cancel {run_id}` (A).
+- Parameters the lab does not use yet (e.g. `press_depth_mm`) are accepted and listed in the result
+  under `ignored`. `stack_device` refuses temperatures other than the v1 ones (90 / 155 / 170 C).
+- `cool_experiment_stages` and `inspect_bench` act on the module they are sent to (its own heater /
+  desk camera). The simulated lab runs both on stacking only; see open-questions.md.
+
 The exact parameter schemas (JSON Schema per action) are in `GET describe` under `commands`.
+
+## Records (brain <-> lab) [Q]
+
+Same shapes as qumus-simlab `docs/interface.md` and the brain's RunStore:
+
+- `GET /api/records?since=<seq>&limit=<n≤2000>` → `{changes: [{seq, table, key, row}], next, head,
+  lab_id}`; tables `sample` (key id), `reservation` (`<kind>:<key>`), `run` (run id), `step`
+  (`<run_id>:<seq>`), `event` (lab events whose kind starts with job., step., sample., safety., lab.).
+  `row: null` = deleted. Start again from 0 when `lab_id` changes. Both module ports answer the same feed.
+- `put_records` (A, accepted while busy): `project` (one `{id, name, state}` or a list), `samples`
+  (rows upserted as given), `removed_samples` (ids), `reservations` (rows; `released: true` removes),
+  `instructions` (accepted, not stored). The changed rows come back through the feed.
+- qumus.db on the lab PC is the lab's own store; the brain keeps its own. No shared files: the same
+  calls work on one computer and across an SSH tunnel; only the URL changes.
 
 ## Extensions marked [Q]
 

@@ -166,11 +166,15 @@ modules:
         sensor_serial: E30753
         other_heaters: [exfoliation_heater]
         boost_voltage: 27.0
-        hold_voltage_by_target: {155: 16.0}
+        # 90 C: set_initial_temp (20 V start, 10 V hold); 155/170 C: drop_down (27 V until > 170 C, then 16 V)
+        hold_voltage_by_target: {90: 10.0, 155: 16.0, 170: 16.0}
+        boost_voltage_by_target: {90: 20.0}
         source: v1
         cite: {at: "common/hardware/defaults.py:14", check: "COM17"}
         cite_sensor: {at: "common/hardware/defaults.py:30", check: "E30753"}
         cite_hold: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_drop_down.py:55", check: "16.0"}
+        cite_hold_90: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_set_initial_temp.py:23", check: "HOLD_VOLTAGE = 10"}
+        cite_boost_90: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_set_initial_temp.py:21", check: "START_VOLTAGE = 20.0"}
       desk_camera_right:
         driver: opencv_camera
         index: 2

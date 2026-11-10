@@ -18,9 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..drivers.base import DriverError, Interrupted, OutcomeUnknown, Refused
-from ..modules.base import ActionContext, Cancelled, Module
+from ..jobs.runner import JobRunner
+from ..modules.base import Action, ActionContext, Cancelled, Module
 from ..safety.gate import GateContext, Rejected
-from ..state.store import LabStore
+from ..state.store import TERMINAL_RUN, LabStore
 
 CONTRACT = 1
 LEASE_S = 3.0
@@ -67,6 +68,8 @@ class ContractService:
             journal_dir.mkdir(parents=True, exist_ok=True)
             self.journal_path = journal_dir / f"{self.name}-{time.strftime('%Y%m%d')}.jsonl"
         module.on_fault = lambda code, message: self._lock_service(code, message)
+        self.jobs = JobRunner(self)
+        self._add_record_actions()
         self._watchdog_stop = threading.Event()
         self._watchdog = threading.Thread(target=self._watch, daemon=True, name=f"watchdog-{self.name}")
         self._watchdog.start()
@@ -157,6 +160,7 @@ class ContractService:
                 "locked": self.locked, "fault": self.fault, "lease": self.lease_view(),
                 "last_command": self.last_command, "devices": devices,
                 "zones": self.module.zones.view(self.module.zone_names()) if self.module.zones else {},
+                "jobs": {"running": self.jobs.running_run(), "queued": [j.run_id for j in self.jobs.queue]},
             }
 
     # ------------------------------------------------------------------ lease
@@ -226,6 +230,22 @@ class ContractService:
             if not action.any_client and (self.lease is None or self.lease.holder != client):
                 holder = self.lease.holder if self.lease else None
                 raise ApiError(409, f"{name} needs the lease (holder: {holder}); POST api/heartbeat first")
+            if action.job:
+                if self.busy_command is not None and not self.busy_command.get("job"):
+                    raise ApiError(409, f"busy with {self.busy_command['action']}")
+                try:
+                    data = self.jobs.submit_locked(action, params, client, gctx)
+                except Rejected as exc:
+                    raise ApiError(exc.status, str(exc)) from exc
+                self.last_command = {"id": command_id, "action": name, "client": client, "result": "ok",
+                                     "message": "job accepted", "finished_at": round(time.time(), 3),
+                                     "output": data, "data": data}
+                self.emit("command accepted", {"id": command_id, "action": name, "client": client,
+                                               "params": params, "run_id": data["run_id"]})
+                self.emit("command done", {"id": command_id, "action": name, "result": "ok",
+                                           "run_id": data["run_id"]})
+                return {"command_id": command_id, "run_id": data["run_id"],
+                        "result": {"run_id": data["run_id"], "flow": data["flow"]}, "state": self.state()}
             if not action.concurrent:
                 if self.busy_command is not None:
                     raise ApiError(409, f"busy with {self.busy_command['action']}")
@@ -280,6 +300,8 @@ class ContractService:
             self.last_command = {"id": command_id, "action": action.name, "client": client, "result": result,
                                  "message": message, "finished_at": round(time.time(), 3),
                                  "output": _jsonable(output)}
+            if result == "ok" and isinstance(self.last_command["output"], dict):
+                self.last_command["data"] = self.last_command["output"]  # ADR [Q] name the brain reads
             if not action.concurrent and self.busy_command and self.busy_command["id"] == command_id:
                 self.busy_command = None
         self.emit(f"command {'done' if result == 'ok' else result}",
@@ -292,9 +314,13 @@ class ContractService:
         self.emit("locked", {"code": code, "message": message, "command_id": command_id}, "error")
 
     def wait_idle(self, timeout_s: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout_s)
         t = self._worker
         if t is not None:
             t.join(timeout=max(0.0, timeout_s))
+        jt = self.jobs._thread
+        if jt is not None and self.jobs.current is not None:
+            jt.join(timeout=max(0.0, deadline - time.monotonic()))
         return self.busy_command is None
 
     # ------------------------------------------------------------------ stop / unlock
@@ -302,6 +328,8 @@ class ContractService:
         """Any client, no lease, idempotent. Stops motion; ``heat_off`` [Q] also switches heaters off."""
         wait_s = min(max(float(wait_s or 0.0), 0.0), 15.0)
         self._cancel.set()
+        with self.lock:
+            dropped = self.jobs.on_stop_locked(reason)
         unconfirmed = []
         for dev in self.module.motion_devices():
             try:
@@ -328,8 +356,8 @@ class ContractService:
             verdict = "confirmed"
         else:
             verdict = "pending"
-        self.emit("stop", {"reason": reason, "stop": verdict, "unconfirmed": unconfirmed, "heat_off": heat_off},
-                  "warning")
+        self.emit("stop", {"reason": reason, "stop": verdict, "unconfirmed": unconfirmed, "heat_off": heat_off,
+                           "jobs_cancelled": dropped}, "warning")
         return {"stop": verdict, "state": self.state()}
 
     def unlock(self, client: str, loopback: bool) -> dict:
@@ -414,6 +442,74 @@ class ContractService:
             elif not heating and last is not None:
                 self._heater_written.pop(dev.id, None)
                 self.record_devices([dev.id])  # final row after it switched off
+
+    # ------------------------------------------------------------------ records (brain <-> lab)
+    def records(self, since: int = 0, limit: int = 500) -> dict:
+        """GET /api/records?since=: lab-wide change feed (sample, reservation, run, step, event)."""
+        if self.store is None:
+            return {"changes": [], "next": since, "lab_id": None}
+        return self.store.changes(since, limit)
+
+    def _add_record_actions(self) -> None:
+        def put_records(ctx: ActionContext, p: dict) -> dict:
+            if self.store is None:
+                raise Rejected("this window has no lab store", 503)
+            n_s = n_r = 0
+            project = p.get("project")
+            projects = project if isinstance(project, list) else ([] if project is None else [project])
+            for pr in projects:
+                if not isinstance(pr, dict) or not isinstance(pr.get("id"), str):
+                    raise Rejected("project must be null, {id, state} or a list of them")
+                self.store.put_project(pr["id"], dict(pr.get("state") or {}, **({"name": pr["name"]}
+                                                                                if pr.get("name") else {})))
+            for sid in p.get("removed_samples") or []:
+                if isinstance(sid, str):
+                    self.store.remove_sample(sid)
+                    n_s += 1
+            for row in p.get("samples") or []:
+                if not isinstance(row, dict):
+                    raise Rejected("samples must be a list of sample rows")
+                if row.get("deleted"):
+                    self.store.remove_sample(row["id"])
+                else:
+                    self.store.merge_sample(row)
+                n_s += 1
+            for row in p.get("reservations") or []:
+                if not isinstance(row, dict):
+                    raise Rejected("reservations must be a list of rows {kind, key, ...}")
+                if row.get("released"):
+                    self.store.release_reservation(row["kind"], row["key"])
+                else:
+                    self.store.put_reservation(row)
+                n_r += 1
+            return {"samples": n_s, "reservations": n_r, "project": [pr["id"] for pr in projects]}
+
+        def job_cancel(ctx: ActionContext, p: dict) -> dict:
+            with self.lock:
+                out = self.jobs.cancel_locked(p["run_id"], f"job_cancel by {ctx.gate_ctx.client}")
+            return {"run_id": p["run_id"], "result": out}
+
+        self.module.add(Action(
+            "put_records", put_records,
+            {"project": {"description": "one {id, name, state} or a list"}, "samples": {"type": "array"},
+             "removed_samples": {"type": "array"}, "reservations": {"type": "array"},
+             "instructions": {"type": "array"}},
+            any_client=True, concurrent=True,
+            description="Brain -> lab: upsert project state, sample rows and reservations as given (last write wins)."))
+        def job_status(ctx: ActionContext, p: dict) -> dict:
+            run = self.store.get_run(p["run_id"]) if self.store is not None else None
+            if run is None:
+                raise Rejected(f"unknown job {p['run_id']}", 404)
+            return {"run_id": run["id"], "flow": run["flow"], "status": run["status"],
+                    "done": run["status"] in TERMINAL_RUN, "result": run.get("result"), "error": run.get("error"),
+                    "workflow": run["flow"], "steps": self.store.get_steps(run["id"]), "module": self.name}
+
+        self.module.add(Action("job_status", job_status, {"run_id": {"type": "string"}}, ("run_id",),
+                               any_client=True, concurrent=True, allowed_when_locked=True,
+                               description="One job's run row and steps (also in GET /api/records)."))
+        self.module.add(Action("job_cancel", job_cancel, {"run_id": {"type": "string"}}, ("run_id",),
+                               any_client=True, concurrent=True, allowed_when_locked=True,
+                               description="Stop one job (running: at its next check) or drop it from the queue."))
 
     def close(self) -> None:
         self._watchdog_stop.set()

@@ -42,12 +42,16 @@ class Heater(Device):
         self.other_relays = list(other_relays or [])
         self.boost_v = float(cfg.get("boost_voltage", 27.0))
         self.hold_table = {float(k): float(v) for k, v in (cfg.get("hold_voltage_by_target") or {}).items()}
+        # v1 used another start voltage for some targets (transfer stage 90 C: 20 V, set_initial_temp)
+        self.boost_table = {float(k): float(v) for k, v in (cfg.get("boost_voltage_by_target") or {}).items()}
         self.max_c = float(cfg.get("max_c", 60.0))
         self.overshoot_c = float(cfg.get("overshoot_c", 15.0))
         self.poll_s = float(cfg.get("poll_s", 2.0))
         self.max_timeout_s = float(cfg.get("max_timeout_s", 1800))
         self._sleep = sleep
         self.phase = "off"
+        self.auto_hold = True
+        self._hold_v: float | None = None
         self.target_c: float | None = None
         self.deadline_unix: float | None = None
         self.last_off_reason: str | None = None
@@ -114,8 +118,13 @@ class Heater(Device):
             return self.hold_table[float(target_c)]
         raise Refused(f"{self.id}: no approved hold voltage for {target_c} C (have {sorted(self.hold_table)})")
 
-    def heat(self, target_c: float, timeout_s: float, *, mode: str = "boost_hold", volts: float | None = None) -> dict:
-        """Start heating in a background thread. Returns at once; the phase shows progress."""
+    def heat(self, target_c: float, timeout_s: float, *, mode: str = "boost_hold", volts: float | None = None,
+             auto_hold: bool = True) -> dict:
+        """Start heating in a background thread. Returns at once; the phase shows progress.
+
+        ``auto_hold=False`` (boost_hold only): stay at the boost voltage past the target until the caller
+        calls ``hold_now()`` (v1 drop_down keeps 27 V until it has seen > 170 C). The overshoot cut-off and
+        the timeout still apply."""
         self.require_connected()
         target_c = float(target_c)
         timeout_s = float(timeout_s)
@@ -125,7 +134,7 @@ class Heater(Device):
             raise Refused(f"{self.id}: timeout_s must be in (0, {self.max_timeout_s}]")
         if mode == "boost_hold":
             hold_v = self.hold_voltage_for(target_c)
-            start_v = self.boost_v
+            start_v = min(self.boost_table.get(target_c, self.boost_v), self.boost_v)
         elif mode == "until":
             if volts is None:
                 raise Refused("mode 'until' needs volts")
@@ -148,6 +157,8 @@ class Heater(Device):
                 self._shutdown("start failed")
                 raise
             self.target_c = target_c
+            self.auto_hold = bool(auto_hold)
+            self._hold_v = hold_v
             self.deadline_unix = time.time() + timeout_s
             self.phase = "boost" if mode == "boost_hold" else "heating"
             self.last_off_reason = None
@@ -204,7 +215,7 @@ class Heater(Device):
                         self.phase = "reached"
                     return False
             else:
-                if self.phase == "boost" and t >= self.target_c:
+                if self.phase == "boost" and t >= self.target_c and getattr(self, "auto_hold", True):
                     self.psu.set_voltage(hold_v)
                     self.phase = "hold"
                 if t > self.target_c + self.overshoot_c and output_on:
@@ -242,6 +253,16 @@ class Heater(Device):
             self.last_off_reason = reason
             self.deadline_unix = None
             return ok
+
+    def hold_now(self) -> dict:
+        """Switch a running boost_hold heat to its approved hold voltage now (see ``auto_hold``)."""
+        with self._state_lock:
+            if not self.heating or self._hold_v is None:
+                raise Refused(f"{self.id}: not heating in boost_hold mode")
+            self.psu.set_voltage(self._hold_v)
+            if self.phase == "boost":
+                self.phase = "hold"
+            return self.snapshot()
 
     def off(self, reason: str = "heat_off") -> dict:
         """Switch off. Raises OutcomeUnknown when the off could not be confirmed (the caller locks)."""

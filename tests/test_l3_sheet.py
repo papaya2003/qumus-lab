@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import fnmatch
 import re
 
 import pytest
@@ -25,10 +26,12 @@ def test_every_named_point_is_in_the_sheet_and_every_point_row_exists():
     keys = {r["写回哪里（qumus-lab）"].split()[1] for r in _rows()
             if r["写回哪里（qumus-lab）"].startswith("points.yaml ") and "新增" not in r["写回哪里（qumus-lab）"]}
     named = {f"{dev}.{name}" for dev, pts in points.items() for name in pts}
-    assert named <= keys  # every named point has a row
+    # a key may be a glob ("arm_left.left_*") for a family of board slots
+    assert all(any(fnmatch.fnmatchcase(n, k) for k in keys) for n in named), \
+        sorted(n for n in named if not any(fnmatch.fnmatchcase(n, k) for k in keys))
     for k in keys:
         dev, _, name = k.partition(".")
-        assert dev in points and (not name or name in points[dev]), k
+        assert dev in points and (not name or any(fnmatch.fnmatchcase(p, name) for p in points[dev])), k
 
 
 def test_measured_columns_start_empty_and_ids_are_unique():

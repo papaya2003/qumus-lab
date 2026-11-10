@@ -27,6 +27,7 @@ class LabConfig:
     limits: dict
     config_dir: Path
     runs_dir: Path
+    places: dict | None = None
 
     @property
     def module_names(self) -> list[str]:
@@ -68,7 +69,7 @@ class LabConfig:
 
     def copy(self) -> LabConfig:
         return LabConfig(copy.deepcopy(self.devices), copy.deepcopy(self.points), copy.deepcopy(self.limits),
-                         self.config_dir, self.runs_dir)
+                         self.config_dir, self.runs_dir, copy.deepcopy(self.places))
 
 
 def load_config(config_dir: str | Path | None = None, runs_dir: str | Path | None = None, *,
@@ -82,4 +83,5 @@ def load_config(config_dir: str | Path | None = None, runs_dir: str | Path | Non
         limits=load_yaml(cdir / "limits.yaml"),
         config_dir=cdir,
         runs_dir=rdir,
+        places=load_yaml(cdir / "places.yaml") if (cdir / "places.yaml").exists() else {},
     )

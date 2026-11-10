@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from .base import Device, NoReply
+from .base import Device, NoReply, Refused
 
 
 class CameraBackend(Protocol):
@@ -151,6 +151,10 @@ class UvchamBackend:
     def grab_preview(self, max_width: int, quality: int) -> tuple[bytes, int, int]:
         return _encode_preview(self._frame(), max_width, quality)
 
+    def autofocus_once(self) -> None:
+        """v1 camera_controller.autofocus_once: one-shot autofocus (UVCHAM_AFMODE = 2)."""
+        self.cam.put(self._uv.UVCHAM_AFMODE, 2)
+
     def close(self) -> None:
         if self.cam is not None:
             self.cam.close()
@@ -238,7 +242,8 @@ class Camera(Device):
 
     @property
     def preview_type(self) -> str:
-        return "image/png" if self.backend.ext == "png" else "image/jpeg"
+        ext = getattr(self.backend, "preview_ext", self.backend.ext)
+        return "image/png" if ext == "png" else "image/jpeg"
 
     def capture(self) -> dict:
         self.require_connected()
@@ -249,6 +254,18 @@ class Camera(Device):
         (self.capture_dir / f"{image_id}.{self.backend.ext}").write_bytes(data)
         self.last_image_id, self.size, self.last_capture_unix = image_id, (w, h), time.time()
         return {"image_id": image_id, "width_px": w, "height_px": h, "ext": self.backend.ext}
+
+    def path_of(self, image_id: str) -> Path:
+        return self.capture_dir / f"{image_id}.{self.backend.ext}"
+
+    def autofocus_once(self) -> None:
+        """One-shot autofocus of the camera itself (v1 used it before every stacking photo)."""
+        self.require_connected()
+        fn = getattr(self.backend, "autofocus_once", None)
+        if fn is None:
+            raise Refused(f"{self.id}: this camera has no autofocus")
+        with self._cam_lock:
+            fn()
 
     def read(self) -> dict:
         self.require_connected()

@@ -96,10 +96,16 @@ def build_stack(config: LabConfig, *, demo: bool, modules: list[str] | None = No
     services = {}
     journal = config.runs_dir / "events"
     store = LabStore.for_runs_dir(config.runs_dir, demo) if use_store else None
+    world = getattr(backends, "world", None)
+    if world is not None and getattr(world, "optics", None) is not None:
+        world.optics.ledger = lambda: store   # demo microscope learns which chip is on the stage
     zone_events: list[tuple] = []
     zones = ZoneRegistry(config.points.get("zones"), store, lambda *ev: zone_events.append(ev))
     for name in modules:
         mod = Module(name, config, lab.module_devices(name), demo, lab.shared, zones)
+        mod.lab_store = store
+        mod.time_scale = float(demo_speed) if demo else 1.0   # ops waits (v1 sleeps) follow the demo clock
+        mod.world = world if demo else None
         BUILDERS[name](mod)
         svc = ContractService(mod, journal_dir=journal, store=store)
         for dev_id, dev in mod.devices.items():
@@ -162,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config-dir", default=None)
     ap.add_argument("--runs-dir", default=None)
     ap.add_argument("--demo-speed", type=float, default=5.0, help="--demo time factor for moves and heating")
+    ap.add_argument("--demo-reset", action="store_true",
+                    help="--demo: empty the demo ledger and put the starting bench back (same ids as the sim lab)")
     ap.add_argument("--viewer-host", default="0.0.0.0",
                     help="view-only camera page (GET only, access key); 127.0.0.1 keeps it on this PC")
     ap.add_argument("--viewer-port", type=int, default=8790)
@@ -173,6 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config_dir, args.runs_dir, demo=args.demo)
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     stack = build_stack(config, demo=args.demo, modules=modules, demo_speed=args.demo_speed)
+    if args.demo and stack.store is not None:
+        from .sim.bench import seed_demo_bench
+
+        n = seed_demo_bench(stack.store, reset=args.demo_reset)
+        if n:
+            logging.info("demo bench: %d starting samples written to the ledger", n)
     servers = []
     for name, svc in stack.services.items():
         port = int(config.module(name).get("port", 0))
