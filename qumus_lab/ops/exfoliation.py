@@ -263,7 +263,7 @@ def exfoliate_chip(ctx: ActionContext, p: dict) -> dict:
     _switch(ctx, VACUUM, True)
     ex = exfoliate_on_stage(ctx, p)
     _switch(ctx, VACUUM, False)
-    stored = c.step(ctx, "chip to storage", lambda: unload_chip(ctx, {"place": dst}))
+    c.step(ctx, "chip to storage", lambda: unload_chip(ctx, {"place": dst}))
     deg = float(p.get("tape_release_deg") or TAPE_RELEASE_DEG)
     c.step(ctx, "new tape", lambda: tape_release(ctx, deg))
     c.step(ctx, "park", lambda: c.park(ctx, ARM))

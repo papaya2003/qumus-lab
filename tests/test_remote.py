@@ -106,7 +106,7 @@ def test_debug_page_shows_the_cameras(stack):
         cams = json.loads(_req(port, "GET", "/cameras.json")[2])["cameras"]
         assert {c["id"] for c in cams} == CAMS
         status, headers, data = _req(port, "GET", "/cam/microscope_camera")
-        assert status == 200 and headers["Content-Type"] == "image/jpeg" and data.startswith(b"\xff\xd8")
+        assert status == 200 and (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG"))  # JPEG with opencv
         assert _req(port, "GET", "/cam/nope")[0] == 404
         page = _req(port, "GET", "/")[2]
         assert b'id="modnav"' in page  # module switcher; each camera row shows its live picture

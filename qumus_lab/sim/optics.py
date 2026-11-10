@@ -54,7 +54,7 @@ class TrueFlake:
 
     def area_um2(self) -> float:
         a = 0.0
-        for (x1, y1), (x2, y2) in zip(self.poly, self.poly[1:] + self.poly[:1]):
+        for (x1, y1), (x2, y2) in zip(self.poly, self.poly[1:] + self.poly[:1], strict=False):
             a += x1 * y2 - x2 * y1
         return abs(a) / 2.0
 
@@ -117,7 +117,7 @@ def make_flakes(chip_id: str, material: str) -> list[TrueFlake]:
 
 def _inside(poly, x, y) -> bool:
     inside = False
-    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1], strict=False):
         if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / ((y2 - y1) or 1e-12) + x1:
             inside = not inside
     return inside

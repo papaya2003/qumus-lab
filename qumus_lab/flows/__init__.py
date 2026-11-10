@@ -96,7 +96,7 @@ def exfoliate_chips(ctx, p: dict) -> dict:
                                      "rounds": p.get("num_massages")})
         uses = 0
     done = []
-    for ch, home, dst in zip(chips, homes, stores):
+    for ch, home, dst in zip(chips, homes, stores, strict=False):
         out = ox.exfoliate_chip(ctx, {"chip_place": home, "store_place": dst, "material": material,
                                       "target_c": float(p.get("target_temp_c") or 22),
                                       "dwell_s": float(p.get("dwell_s") or 10),
@@ -220,7 +220,7 @@ def stack_device(ctx, p: dict) -> dict:
         raise Rejected(f"unknown flake in {p['flake_ids']}")
     target = _chip_row(ctx, p["target_chip_id"])
     stamp_id = p.get("stamp_id")
-    stamps = [s for s in st.list_samples() if s["kind"] == "stamp" and s.get("status") in (None, "", "new")
+    stamps = [s for s in st.list_samples() if s["kind"] == "stamp" and s.get("status") in (None, "", "new", "fresh")
               and str(s.get("location", "")).startswith("right_stamp")]
     if stamp_id:
         stamps = [s for s in stamps if s["id"] == stamp_id]
@@ -280,7 +280,7 @@ def cool_experiment_stages(ctx, p: dict) -> dict:
         def cold(dev=dev):
             t = dev.read().get("temp_c")
             return t is not None and t < FINAL_BELOW_C and t
-        t = ctx.step(f"cool {dev_id}", lambda cold=cold: c.wait_until(ctx, cold, 3600, 5.0,
+        t = ctx.step(f"cool {dev_id}", lambda cold=cold, dev_id=dev_id: c.wait_until(ctx, cold, 3600, 5.0,
                                                                       f"{dev_id} below {FINAL_BELOW_C} C"))
         if fan and fan in ctx.module.devices:
             ctx.device(fan, ("switch",)).set(False)

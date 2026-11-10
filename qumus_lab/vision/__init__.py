@@ -18,8 +18,9 @@ like v1's.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
 
 REF_WIDTH = 3840          # v1 frames: target_pt (1920, 1080) is the centre of 3840 x 2160
 REF_HEIGHT = 2160
@@ -186,9 +187,21 @@ def contrast_flakes(img, *, objective: int, material: str | None, min_area_um2: 
         if area < min_px or bw >= w * 0.9 or bh >= h * 0.9:  # skip tiny specks and chip edges
             continue
         c = float(bg - g[labels == i].mean())
-        label = "thin" if abs(c) < 14 else ("medium" if abs(c) < 40 else "thick")
+        label = contrast_label(c, material)
         out.append(Flake(float(cents[i][0]), float(cents[i][1]), float(area), c, (x, y, bw, bh), label))
     return sorted(out, key=lambda f: -f.area_px)
+
+
+def contrast_label(contrast: float, material: str | None) -> str:
+    """Thickness class names of the simulated lab / v1 search (hBN: nm bins; graphene: layers). The grey
+    level thresholds are PLACEHOLDERS for the demo renderer, not a calibration."""
+    a = abs(contrast)
+    m = (material or "").lower()
+    if m.startswith("h") or "bn" in m:
+        return "0-10" if a < 10 else "10-20" if a < 20 else "20-30" if a < 40 else "30-40"
+    if m.startswith("g"):
+        return "monolayer" if a < 16 else "bilayer" if a < 40 else "manylayer"
+    return "thin" if a < 14 else "medium" if a < 40 else "thick"
 
 
 _detector: Callable[..., list[Flake]] = contrast_flakes

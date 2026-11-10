@@ -168,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config-dir", default=None)
     ap.add_argument("--runs-dir", default=None)
     ap.add_argument("--demo-speed", type=float, default=5.0, help="--demo time factor for moves and heating")
+    ap.add_argument("--demo-reset", action="store_true",
+                    help="--demo: empty the demo ledger and put the starting bench back (same ids as the sim lab)")
     ap.add_argument("--viewer-host", default="0.0.0.0",
                     help="view-only camera page (GET only, access key); 127.0.0.1 keeps it on this PC")
     ap.add_argument("--viewer-port", type=int, default=8790)
@@ -179,6 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config_dir, args.runs_dir, demo=args.demo)
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
     stack = build_stack(config, demo=args.demo, modules=modules, demo_speed=args.demo_speed)
+    if args.demo and stack.store is not None:
+        from .sim.bench import seed_demo_bench
+
+        n = seed_demo_bench(stack.store, reset=args.demo_reset)
+        if n:
+            logging.info("demo bench: %d starting samples written to the ledger", n)
     servers = []
     for name, svc in stack.services.items():
         port = int(config.module(name).get("port", 0))

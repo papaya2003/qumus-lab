@@ -80,3 +80,14 @@ Found in the 11-08 safety self-review and not changed (see `tests/test_fault_inj
     default. Set the default branch to `main` in the repo settings.
 24. **Fonts.** The debug page loads Barlow from Google Fonts; offline it falls back to Segoe UI.
 25. **Bad parameters** return `400` (shared ADR) rather than `422` (the brief).
+
+## L4-L6 (11-10, demo only)
+
+- Image direction and optical centre (stage +x moves the picture which way? which pixel is the axis?).
+  `ops/stacking.py IMAGE_SIGN`, L3 row `microscope_camera.centre`.
+- Did v1's 10x use 0.365 um/px (code) or 5x/2? The port assumes 5x/2 = 0.365.
+- `cool_experiment_stages` / `inspect_bench`: the sim lab runs them on stacking for both stages; here each
+  module handles its own heater / desk camera. Brain thread to decide (send to both, or move them).
+- Job controls beyond `job_cancel` / `job_status` (retry, resume, reverify, review_waiting) are not built.
+- The flake detector is a placeholder; Edward's replaces it (docs/vision.md).
+- Drop target is "mm from the chip centre": corner detection and the GDS target are not built.
