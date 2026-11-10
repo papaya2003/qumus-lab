@@ -21,7 +21,7 @@ from ..drivers.base import DriverError, Interrupted, OutcomeUnknown, Refused
 from ..jobs.runner import JobRunner
 from ..modules.base import Action, ActionContext, Cancelled, Module
 from ..safety.gate import GateContext, Rejected
-from ..state.store import LabStore
+from ..state.store import TERMINAL_RUN, LabStore
 
 CONTRACT = 1
 LEASE_S = 3.0
@@ -244,7 +244,8 @@ class ContractService:
                                                "params": params, "run_id": data["run_id"]})
                 self.emit("command done", {"id": command_id, "action": name, "result": "ok",
                                            "run_id": data["run_id"]})
-                return {"command_id": command_id, "run_id": data["run_id"], "state": self.state()}
+                return {"command_id": command_id, "run_id": data["run_id"],
+                        "result": {"run_id": data["run_id"], "flow": data["flow"]}, "state": self.state()}
             if not action.concurrent:
                 if self.busy_command is not None:
                     raise ApiError(409, f"busy with {self.busy_command['action']}")
@@ -455,10 +456,16 @@ class ContractService:
                 raise Rejected("this window has no lab store", 503)
             n_s = n_r = 0
             project = p.get("project")
-            if project is not None:
-                if not isinstance(project, dict) or not isinstance(project.get("id"), str):
-                    raise Rejected("project must be null or {id, state}")
-                self.store.put_project(project["id"], project.get("state") or {})
+            projects = project if isinstance(project, list) else ([] if project is None else [project])
+            for pr in projects:
+                if not isinstance(pr, dict) or not isinstance(pr.get("id"), str):
+                    raise Rejected("project must be null, {id, state} or a list of them")
+                self.store.put_project(pr["id"], dict(pr.get("state") or {}, **({"name": pr["name"]}
+                                                                                if pr.get("name") else {})))
+            for sid in p.get("removed_samples") or []:
+                if isinstance(sid, str):
+                    self.store.remove_sample(sid)
+                    n_s += 1
             for row in p.get("samples") or []:
                 if not isinstance(row, dict):
                     raise Rejected("samples must be a list of sample rows")
@@ -475,7 +482,7 @@ class ContractService:
                 else:
                     self.store.put_reservation(row)
                 n_r += 1
-            return {"samples": n_s, "reservations": n_r, "project": (project or {}).get("id")}
+            return {"samples": n_s, "reservations": n_r, "project": [pr["id"] for pr in projects]}
 
         def job_cancel(ctx: ActionContext, p: dict) -> dict:
             with self.lock:
@@ -484,10 +491,22 @@ class ContractService:
 
         self.module.add(Action(
             "put_records", put_records,
-            {"project": {"type": "object"}, "samples": {"type": "array"}, "reservations": {"type": "array"},
+            {"project": {"description": "one {id, name, state} or a list"}, "samples": {"type": "array"},
+             "removed_samples": {"type": "array"}, "reservations": {"type": "array"},
              "instructions": {"type": "array"}},
             any_client=True, concurrent=True,
             description="Brain -> lab: upsert project state, sample rows and reservations as given (last write wins)."))
+        def job_status(ctx: ActionContext, p: dict) -> dict:
+            run = self.store.get_run(p["run_id"]) if self.store is not None else None
+            if run is None:
+                raise Rejected(f"unknown job {p['run_id']}", 404)
+            return {"run_id": run["id"], "flow": run["flow"], "status": run["status"],
+                    "done": run["status"] in TERMINAL_RUN, "result": run.get("result"), "error": run.get("error"),
+                    "workflow": run["flow"], "steps": self.store.get_steps(run["id"]), "module": self.name}
+
+        self.module.add(Action("job_status", job_status, {"run_id": {"type": "string"}}, ("run_id",),
+                               any_client=True, concurrent=True, allowed_when_locked=True,
+                               description="One job's run row and steps (also in GET /api/records)."))
         self.module.add(Action("job_cancel", job_cancel, {"run_id": {"type": "string"}}, ("run_id",),
                                any_client=True, concurrent=True, allowed_when_locked=True,
                                description="Stop one job (running: at its next check) or drop it from the queue."))

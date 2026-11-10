@@ -68,6 +68,8 @@ points:
     stamp_pick:        {xyz: [254, 190, 16], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:267", check: "X254 Y190 Z150"}}
     stamp_via:         {xyz: [200, 275, 150], source: v1, cite: {at: "common/hardware/robot_arm_controller.py:272", check: "X200 Y275 Z150"}}
     stamp_place:       {xyz: [42, 275, 134], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:276", check: "X42 Y275 Z150"}}
+    stamp_recycle_pick: {xyz: [42, 276, 134], approach_z: 150, source: v1, cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:27", check: "PICK_Y = 276.0"}}
+    stamp_bin:         {xyz: [-250, 250, 15], approach_z: 100, source: v1, cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:30", check: "RECYCLE_X = -250.0"}}
     slot_S1:  {xyz: [-320, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:31", check: "(-320, 160)"}}
     slot_S2:  {xyz: [-280, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:32", check: "(-280, 160)"}}
     slot_S3:  {xyz: [-240, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:33", check: "(-240, 160)"}}

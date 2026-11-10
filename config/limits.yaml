@@ -76,5 +76,12 @@ heaters:
     source: v1
     cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_drop_down.py:90", check: "170.0"}
 
+stacking:
+  # Anti-crash cap (Qumus addition): the touch search and the pick-up approach never send the stamp below
+  # this z; they end with a failed step instead. 4.9 = the lowest z v1 ever commands (drop_down DROP_DOWN_Z).
+  stamp_z_floor_mm: 4.9
+  source: v1
+  cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_drop_down.py:60", check: "DROP_DOWN_Z = 4.9"}
+
 switches:
   auto_off_default_s: 10        # set_switch from the probe/debug page turns itself off after this

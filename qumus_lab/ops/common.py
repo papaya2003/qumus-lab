@@ -179,7 +179,8 @@ def sleep(ctx: ActionContext, seconds: float) -> None:
     """Wait, waking at once on stop (works for single commands and jobs)."""
     from ..modules.base import Cancelled
 
-    if ctx.cancel.wait(max(0.0, float(seconds))):
+    scale = float(getattr(ctx.module, "time_scale", 1.0) or 1.0)
+    if ctx.cancel.wait(max(0.0, float(seconds)) / scale):
         raise Cancelled("stopped")
 
 

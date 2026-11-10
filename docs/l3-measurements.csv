@@ -36,6 +36,8 @@ arm_right.stage_chip_pick,Stacking,arm_right,从样品台上取芯片,points.yam
 arm_right.stamp_pick,Stacking,arm_right,从右板取印章的位置,points.yaml arm_right.stamp_pick,X254 Y190 Z16（先到 Z150）,common/hardware/robot_arm_controller.py:267,调试网页上 jog / 长按 / 输入目标位置移到位，读数抄下来,3,0.1 mm,,,,,,,
 arm_right.stamp_via,Stacking,arm_right,送印章途中的过渡点,points.yaml arm_right.stamp_via,X200 Y275 Z150,common/hardware/robot_arm_controller.py:272,调试网页上 jog / 长按 / 输入目标位置移到位，读数抄下来,1,1 mm,,,,,,,
 arm_right.stamp_place,Stacking,arm_right,把印章放到印章架上（印章架在 load）,points.yaml arm_right.stamp_place,X42 Y275 Z134（先到 Z150）,common/hardware/robot_arm_controller.py:276,印章架先到 load；调试网页上 jog / 长按 / 输入目标位置移到位，读数抄下来,3,0.1 mm,,,,,,,
+arm_right.stamp_recycle_pick,Stacking,arm_right,回收印章时从印章架上取印章的位置,points.yaml arm_right.stamp_recycle_pick,X42 Y276 Z134,agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:27,印章架在 load 位置时移过去记下（注意 v1 放是 Y275、取是 Y276）,3,0.1 mm,,,,,,,
+arm_right.stamp_bin,Stacking,arm_right,用过的印章丢弃位置,points.yaml arm_right.stamp_bin,X-250 Y250 Z15,agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:30,移过去记下；确认下面是回收盒,3,1 mm,,,,,,,
 arm_right.slot_S1,Stacking,arm_right,中间板 S1：右臂取放位置,points.yaml arm_right.slot_S1,X-320 Y160 Z14（先到 Z30）,database/seed_chip_slots.py:31,移到槽中心上方，再降到能吸住芯片的高度（用一片废芯片）,3,0.1 mm,,,,,,,
 arm_right.slot_S2,Stacking,arm_right,中间板 S2：右臂取放位置,points.yaml arm_right.slot_S2,X-280 Y160 Z14（先到 Z30）,database/seed_chip_slots.py:32,移到槽中心上方，再降到能吸住芯片的高度（用一片废芯片）,3,0.1 mm,,,,,,,
 arm_right.slot_S3,Stacking,arm_right,中间板 S3：右臂取放位置,points.yaml arm_right.slot_S3,X-240 Y160 Z14（先到 Z30）,database/seed_chip_slots.py:33,移到槽中心上方，再降到能吸住芯片的高度（用一片废芯片）,3,0.1 mm,,,,,,,

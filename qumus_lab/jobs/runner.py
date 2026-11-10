@@ -79,8 +79,9 @@ class JobContext(ActionContext):
         self.service.emit(kind, dict(payload or {}, run_id=self.run_id), level)
 
     def sleep(self, seconds: float) -> None:
-        """Wait, but wake at once on stop."""
-        if self.cancel.wait(max(0.0, float(seconds))):
+        """Wait, but wake at once on stop (--demo: shortened by the demo time factor)."""
+        scale = float(getattr(self.module, "time_scale", 1.0) or 1.0)
+        if self.cancel.wait(max(0.0, float(seconds)) / scale):
             raise Cancelled("stopped")
 
     def wait_until(self, pred: Callable[[], Any], timeout_s: float, poll_s: float = 0.5, what: str = "") -> Any:

@@ -320,8 +320,10 @@ class LabStore:
         with self._lock:
             rows = self._db.execute("SELECT * FROM change WHERE seq > ? ORDER BY seq LIMIT ?",
                                     (int(since), int(limit))).fetchall()
+            head = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM change").fetchone()[0]
         out = [{"seq": r["seq"], "table": r["tbl"], "key": r["key"], "row": _loads(r["row_json"])} for r in rows]
-        return {"changes": out, "next": out[-1]["seq"] if out else max(int(since), 0), "lab_id": self.lab_id}
+        return {"changes": out, "next": out[-1]["seq"] if out else max(int(since), 0), "head": int(head),
+                "lab_id": self.lab_id}
 
     def remove_sample(self, sample_id: str) -> None:
         with self._lock, self._db:

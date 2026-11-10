@@ -126,6 +126,9 @@ def build_exfoliation(module: Module) -> Module:
     register_common(module)
     if {"arm_left", "tape_gantry", "tape_reels", "exfoliation_heater"} <= set(module.devices):
         _register_l4(module)
+    from ..flows import register_exfoliation
+
+    register_exfoliation(module)
     if "tape_gantry" in module.devices:
         module.add(Action("apply_tape", apply_tape, motion=True,
                           description="Lay the tape with the v1 arc (geometry in points.yaml; real mode needs measured)."))

@@ -48,6 +48,6 @@ places:
 # Work places that are not storage slots (one object at a time).
 stations:
   exfoliation_stage: {module: exfoliation, holds: [chip, carrier]}
-  transfer_stage:    {module: stacking, holds: [chip]}
+  transfer_stage:    {module: stacking, holds: [chip], scan_area_mm: [8.0, 6.0]}   # scan_area: sketch (chip minus 1 mm)
   stamp_holder:      {module: stacking, holds: [stamp]}
   tape:              {module: exfoliation, holds: [tape]}

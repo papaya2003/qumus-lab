@@ -125,6 +125,8 @@ class Module:
         self.actions: dict[str, Action] = {}
         self._switch_timers: dict[str, threading.Timer] = {}
         self.lab_store = None  # qumus.db (set by the launcher); L4 operations keep the sample ledger in it
+        self.time_scale = 1.0  # --demo: v1 waits inside L4 operations run this many times faster
+        self.world = None      # --demo only: the SimWorld (never used by operations, only by tests)
         #: set by the service: lock the module (code, message) when an off can not be confirmed
         self.on_fault: Callable[[str, str], None] | None = None
 

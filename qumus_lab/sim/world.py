@@ -36,6 +36,9 @@ class SimWorld:
         for mod in config.module_names:
             for dev_id, cfg in config.module(mod)["devices"].items():
                 self._add(dev_id, cfg, park)
+        from .optics import DemoOptics
+
+        self.optics = DemoOptics(self, config)  # microscope frames; launcher sets optics.ledger
 
     def _add(self, dev_id: str, cfg: dict, park: dict) -> None:
         drv = cfg["driver"]
@@ -59,7 +62,10 @@ class SimWorld:
             relay = RelayEmulator()
             self.emulators[cfg["relay"]["port"]["port"]] = relay
             self.by_device[f"{dev_id}.relay"] = relay
-            self.thermal_by_sensor[str(cfg["sensor_serial"])] = ThermalModel(self.clock, self.psu, relay)
+            # transfer stage: v1 reaches the 170 C melt at 27 V, so its steady state must lie above that
+            gain = 3.0 if "transfer" in dev_id else 2.0
+            self.thermal_by_sensor[str(cfg["sensor_serial"])] = ThermalModel(self.clock, self.psu, relay,
+                                                                             gain_c_per_w=gain)
         elif drv == "manipulator":
             rail = KZ100Emulator(self.clock, start_steps={"L": 0})
             self.emulators[cfg["rail"]["port"]["port"]] = rail
@@ -80,7 +86,14 @@ class SimWorld:
 
     def camera(self, dev_id: str, cfg: dict) -> FakeCameraBackend:
         if "microscope" in dev_id:
-            return FakeCameraBackend(scene=self._microscope_scene, tint=(70, 60, 90))
+            try:
+                import cv2  # noqa: F401
+                import numpy  # noqa: F401
+            except ImportError:  # minimal installs: marker frames only (no vision)
+                return FakeCameraBackend(scene=self._microscope_scene, tint=(70, 60, 90))
+            from .optics import RenderCameraBackend
+
+            return RenderCameraBackend(self.optics)
         arm = self.by_device.get("arm_left" if "left" in dev_id else "arm_right")
         return FakeCameraBackend(scene=lambda: self._arm_scene(arm), tint=(50, 70, 60) if "left" in dev_id else (50, 60, 80))
 

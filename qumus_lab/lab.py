@@ -125,7 +125,8 @@ def _build_device(dev_id, cfg, backends: Backends, config: LabConfig, psu, draca
     sf = backends.serial_factory
     drv = cfg["driver"]
     if backends.demo:  # emulators need no settle time after opening
-        cfg = dict(cfg, open_settle_s=0, poll_s=0.3)
+        speed = float(getattr(getattr(backends.world, "clock", None), "speed", 1.0) or 1.0)
+        cfg = dict(cfg, open_settle_s=0, poll_s=max(0.02, 0.3 / max(1.0, speed / 5.0)))
     if drv == "gcode_arm":
         return GcodeArm(dev_id, cfg, sf)
     if drv == "relay":

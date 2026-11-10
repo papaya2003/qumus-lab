@@ -96,11 +96,16 @@ def build_stack(config: LabConfig, *, demo: bool, modules: list[str] | None = No
     services = {}
     journal = config.runs_dir / "events"
     store = LabStore.for_runs_dir(config.runs_dir, demo) if use_store else None
+    world = getattr(backends, "world", None)
+    if world is not None and getattr(world, "optics", None) is not None:
+        world.optics.ledger = lambda: store   # demo microscope learns which chip is on the stage
     zone_events: list[tuple] = []
     zones = ZoneRegistry(config.points.get("zones"), store, lambda *ev: zone_events.append(ev))
     for name in modules:
         mod = Module(name, config, lab.module_devices(name), demo, lab.shared, zones)
         mod.lab_store = store
+        mod.time_scale = float(demo_speed) if demo else 1.0   # ops waits (v1 sleeps) follow the demo clock
+        mod.world = world if demo else None
         BUILDERS[name](mod)
         svc = ContractService(mod, journal_dir=journal, store=store)
         for dev_id, dev in mod.devices.items():
