@@ -218,7 +218,8 @@ input[type="number"] { width: 6.5em; font-family: var(--font-mono); }
 .cam__last { position: absolute; right: 8px; bottom: 8px; width: 22%; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid #3a3833; background: #000; }
 .cam__last img { width: 100%; display: block; }
 .cam__last[hidden] { display: none; }
-.cam__obj { display: flex; gap: 4px; align-items: center; width: 100%; }
+.cam__obj { position: absolute; left: 8px; top: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  padding: 4px 6px; border-radius: var(--radius-sm); background: #181715cc; }
 .cam .err { color: #e98b8b; font-size: 12px; padding: 4px; }
 .cam .err:empty { display: none; }
 

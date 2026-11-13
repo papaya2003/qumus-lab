@@ -559,7 +559,8 @@ function cameraCard(mod, d, turret) {
   const objective = h("span", { class: "cam__info" });
   const view = h("div", { class: "cam__view" }, img, last);
   const bar = h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id.replace(/_camera/, "").replace(/_/g, " ")), info, tools);
-  if (turret) bar.append(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
+  // objectives sit on the picture (top left), so the microscope tile is exactly as big as the others
+  if (turret) view.append(h("div", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
   el.append(bar, view, h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
     setDot(el, st);
