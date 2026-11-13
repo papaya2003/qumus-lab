@@ -6,7 +6,7 @@ contact z), heater curves, tape feed, turret positions and microscope pixel size
 with its `file:line` in the read-only v1 copy, how to measure it, repeats, tolerance, and empty columns for
 the measured values. Measured values go back into `config/` with `source: measured`, `measured_by`, `date`.
 
-表格：[`l3-measurements.csv`](l3-measurements.csv)（UTF-8，Excel 可直接打开）。一共 71 行，分 Exfoliation 和 Stacking 两块。
+表格：[`l3-measurements.csv`](l3-measurements.csv)（UTF-8，Excel 可直接打开）。一共 80 行，分 Exfoliation 和 Stacking 两块。
 
 ## 每一列
 

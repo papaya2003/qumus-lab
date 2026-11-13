@@ -200,6 +200,16 @@ function buildRow(mod, d) {
   if (d.kind === "arm") {
     ctl.append(guarded(mod, "arm_suction", "Suction on", () => ({ device: d.id, on: true })),
                guarded(mod, "arm_suction", "Suction off", () => ({ device: d.id, on: false })));
+    if (m.describe.commands.rotate_nozzle) {
+      // v1 M2101 R<integer deg>; the arm does not report its nozzle angle, the page shows the last command
+      const deg = numInput(0, -180, 180, 1, "nozzle degrees");
+      ctl.append(h("label", { class: "muted" }, "nozzle ", deg, " deg"),
+                 guarded(mod, "rotate_nozzle", "Rotate nozzle", () => {
+                   const v = Math.round(Number(deg.value));
+                   if (!Number.isFinite(v) || v < -180 || v > 180) return null;
+                   return { device: d.id, deg: v };
+                 }));
+    }
   }
   if (d.kind === "turret") {
     for (const mag of [5, 10, 20, 100]) ctl.append(guarded(mod, "set_objective", `${mag}x`, () => ({ objective: mag })));
