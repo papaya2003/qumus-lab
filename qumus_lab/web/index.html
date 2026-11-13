@@ -4,56 +4,74 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qumus lab bench</title>
+<!-- Hearth design system faces (Google Fonts). Offline (lab PC) the page falls back to system fonts. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="bar">
-  <h1>Qumus lab bench</h1>
-  <span id="mode" class="mode">connecting</span>
-  <span id="devmode" class="mode devmode" hidden title="limits.yaml dev_mode: true. Jog and typed-move caps, first-heat caps, switch auto-off cap and move confirmations are off. Heater limits, axis ranges, zone lock and STOP ALL still apply.">Development mode: speed limits off</span>
-  <div class="control">
-    <label class="take"><input type="checkbox" id="take"> <span>Take control</span></label>
-    <span id="leaseinfo" class="muted">Reading only. Moves, switches and heating need control.</span>
+<header class="topnav">
+  <div class="topnav__inner">
+    <span class="wordmark">Qumus <span class="wordmark__sub">lab bench</span></span>
+    <nav class="tabs" aria-label="Modules"><div id="modnav" class="tabs__list" role="tablist"></div></nav>
+    <div class="topnav__badges">
+      <span id="mode" class="badge">connecting</span>
+      <span id="devmode" class="badge badge--dev" hidden
+        title="limits.yaml dev_mode: true. Jog and typed-move caps, first-heat caps, switch auto-off cap and move confirmations are off. Heater limits, axis ranges, zone lock and STOP ALL still apply.">Development mode</span>
+    </div>
+    <div class="topnav__control">
+      <span id="leaseinfo" class="muted small">Reading only. Moves, switches and heating need control.</span>
+      <button id="take" type="button" class="btn btn--primary" aria-pressed="false">Take control</button>
+    </div>
   </div>
 </header>
 
-<div class="layout">
-  <nav class="modnav" aria-label="Modules"><ul id="modnav"></ul></nav>
-  <main id="bench" class="bench" aria-live="polite"></main>
-</div>
+<main id="bench" class="bench" aria-live="polite"></main>
 
 <section class="events" aria-label="Events">
-  <div class="events-head">
-    <h2>Events</h2>
-    <label class="muted"><input type="checkbox" id="evwarn"> Only warnings and errors</label>
+  <div class="events__bar">
+    <span class="events__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <h2 class="events__title">Events</h2>
+    <label class="events__filter"><input type="checkbox" id="evwarn"> Only warnings and errors</label>
   </div>
-  <ol id="events"></ol>
+  <ol id="events" class="events__list"></ol>
 </section>
 
 <footer class="estop">
-  <button id="stopall" type="button">STOP ALL</button>
-  <p>Stops every axis of both modules and switches both heaters off. Works without control.</p>
-  <span id="stopresult" class="stopresult"></span>
+  <div class="estop__inner">
+    <button id="stopall" type="button" class="estop__btn">STOP ALL</button>
+    <p class="estop__note">Stops every axis of both modules and switches both heaters off. Works without control.</p>
+    <span id="stopresult" class="estop__result"></span>
+  </div>
 </footer>
 
 <template id="tpl-module">
   <section class="module">
-    <div class="module-head">
-      <h2></h2>
-      <span class="port muted"></span>
-      <button type="button" class="readall">Read all</button>
+    <div class="statusbar">
+      <div class="status"></div>
+      <button type="button" class="btn btn--secondary btn--sm readall">Read all</button>
     </div>
-    <div class="status"></div>
-    <div class="goto">
-      <label>Go to point <select class="points"></select></label>
-      <button type="button" class="go">Go</button>
-      <span class="muted hint">Real mode: only measured points move.</span>
-    </div>
-    <p class="muted howto">Jog buttons: click for one step, hold to keep stepping (stops when you let go, at most 20 steps per hold). "Move to" takes a typed position.</p>
-    <div class="devices"></div>
+    <section class="band band--cams">
+      <h2 class="eyebrow">Cameras</h2>
+      <div class="cams"></div>
+    </section>
+    <section class="band band--motion">
+      <div class="band__head">
+        <h2 class="band__title">Motion</h2>
+        <p class="muted small howto">Each box shows where the axis is now. Type a new value and press Enter (or Move) to go there; Esc puts
+          the live value back. − / + steps once; hold to keep stepping. Several edited axes move one after another: z up first, z down last.</p>
+      </div>
+      <div class="grid motion"></div>
+    </section>
+    <section class="band band--io">
+      <h2 class="band__title">Heat, suction and air</h2>
+      <div class="grid io"></div>
+    </section>
+    <section class="band band--other">
+      <h2 class="band__title">Tape and other devices</h2>
+      <div class="grid other"></div>
+    </section>
   </section>
 </template>
 <script src="app.js"></script>

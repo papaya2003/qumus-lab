@@ -1,13 +1,15 @@
-/* Qumus lab bench debug page. Talks to the module services through /m/<module>/api/... (contract v1). */
+/* Qumus lab bench debug page. Talks to the module services through /m/<module>/api/... (contract v1).
+   Layout (2026-11-13 redesign, Hearth design system): cameras on top, then one card per moving device whose
+   position boxes show the live value and take a typed target, then heaters / switches, then the rest. */
 "use strict";
 
 const CLIENT = "debug-page-" + Math.random().toString(36).slice(2, 6);
-const MODULE_TITLES = { exfoliation: "Exfoliation (left)", stacking: "Stacking (right)" };
-const modules = {};   // name -> {describe, state, el, nav, evNext}
+const MODULE_TITLES = { exfoliation: "Exfoliation", stacking: "Stacking" };
+const modules = {};   // name -> {describe, state, el, tab, evNext, cards}
 const events = [];
 let control = false;
 let devMode = false;  // limits.yaml dev_mode: speed caps off (the service still checks ranges, heat, zones)
-let current = null;   // module shown in the main area
+let current = null;   // module shown
 const HOLD_DELAY_MS = 350;   // a press longer than this keeps stepping
 const HOLD_MAX_STEPS = 20;   // a hold stops by itself after this many steps (e.g. a lost mouse-up over remote desktop)
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -18,7 +20,7 @@ const h = (tag, attrs = {}, ...kids) => {
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (v !== undefined && v !== null) el.setAttribute(k, v);
+    else if (v !== undefined && v !== null && v !== false) el.setAttribute(k, v);
   }
   for (const kid of kids.flat()) if (kid !== null && kid !== undefined) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
   return el;
@@ -56,7 +58,6 @@ function canRun(m, action) {
 }
 
 async function send(mod, action, params = {}) {
-  const m = modules[mod];
   const r = await api(mod, "POST", "/api/command", { action, ...params });
   if (r.status !== 202) flash(mod, `${action} refused (${r.status}): ${r.data && r.data.error}`, "failed");
   return r;
@@ -67,35 +68,6 @@ function flash(mod, text, cls) {
   m.flash = { text, cls, at: Date.now(), until: Date.now() + 8000 };
   renderStatus(m);
 }
-
-/* ------------------------------------------------------------------ device rows */
-const READ_KEYS = {
-  arm: [["x_mm", "x", "mm"], ["y_mm", "y", "mm"], ["z_mm", "z", "mm"], ["nozzle_deg", "nozzle", "deg"], ["vacuum_on", "suction", ""], ["pose_trusted", "position trusted", ""]],
-  stage: [["x_mm", "x", "mm"], ["y_mm", "y", "mm"], ["rail_mm", "rail", "mm"], ["moving", "moving", ""]],
-  manipulator: [["x_mm", "x", "mm"], ["y_mm", "y", "mm"], ["z_mm", "z", "mm"], ["rail_mm", "rail", "mm"], ["goni_deg", "goniometer", "deg"]],
-  gantry: [["x_mm", "x", "mm"], ["z_mm", "z", "mm"], ["motors_on", "motors on", ""]],
-  focus: [["z_um", "z (estimate)", "um"]],
-  turret: [["objective", "objective", "x"], ["position", "position", ""], ["last_reply", "reply", ""]],
-  switch: [["on", "on", ""], ["confirmed", "confirmed", ""], ["raw_reply", "reply", ""]],
-  heater: [["temp_c", "", "C"], ["target_c", "target", "C"], ["set_v", "set", "V"], ["phase", "phase", ""], ["last_off_reason", "last off", ""]],
-  camera: [["last_image_id", "last image", ""]],
-  tape_reels: [["motor1_on", "reel 1 on", ""], ["motor2_on", "reel 2 on", ""], ["last_command", "last", ""]],
-};
-const JOG = {
-  arm: { axes: ["x", "y", "z"], steps: [0.1, 0.5] },
-  stage: { axes: ["x", "y", "rail"], steps: [0.1, 0.5] },
-  manipulator: { axes: ["x", "y", "z", "rail"], steps: [0.01, 0.05, 0.1] },
-  gantry: { axes: ["x", "z"], steps: [0.1, 0.5] },
-  focus: { axes: ["z"], steps: [0.005, 0.02, 0.05] },
-};
-// Development mode: larger jog steps (mm; focus in mm too, shown as um).
-const DEV_STEPS = {
-  arm: [0.1, 0.5, 1, 5, 10], stage: [0.1, 0.5, 1, 5, 10], manipulator: [0.01, 0.1, 0.5, 1],
-  gantry: [0.1, 0.5, 1, 5, 10], focus: [0.005, 0.05, 0.5, 1],
-};
-
-const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
-const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
 
 /* Wait for a command to finish (last_command carries its id). Returns last_command, or null on timeout. */
 async function waitDone(mod, id, timeoutMs = 60000) {
@@ -111,16 +83,39 @@ async function waitDone(mod, id, timeoutMs = 60000) {
   return null;
 }
 
-/* Hold-to-move: every step is an ordinary capped jog that the gate checks; the next one is sent only after the
-   last one finished ok and while the button is still held. Letting go sends nothing more (the step that is
-   running finishes; an arm has no stop command, so no stop is sent). */
+/* ------------------------------------------------------------------ device tables */
+const MOTION = { arm: ["x", "y", "z"], stage: ["x", "y", "rail"], manipulator: ["x", "y", "z", "rail"], gantry: ["x", "z"], focus: ["z"] };
+const STEPS = {
+  arm: [0.1, 0.5], stage: [0.1, 0.5], manipulator: [0.01, 0.05, 0.1], gantry: [0.1, 0.5], focus: [0.005, 0.02, 0.05],
+};
+// Development mode: larger jog steps (mm; focus in mm too, shown as um).
+const DEV_STEPS = {
+  arm: [0.1, 0.5, 1, 5, 10], stage: [0.1, 0.5, 1, 5, 10], manipulator: [0.01, 0.1, 0.5, 1],
+  gantry: [0.1, 0.5, 1, 5, 10], focus: [0.005, 0.05, 0.5, 1],
+};
+// Small facts under the position boxes (read-only fields of the device).
+const FACTS = {
+  arm: [["vacuum_on", "suction"], ["pose_trusted", "position trusted"], ["moving", "moving"]],
+  stage: [["moving", "moving"]],
+  manipulator: [["goni_deg", "goniometer", "deg"]],
+  gantry: [["motors_on", "motors on"]],
+  focus: [],
+};
+const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
+const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
+const GROUP = (kind) => (kind === "camera" ? "cams" : MOTION[kind] ? "motion" : (kind === "heater" || kind === "switch") ? "io" : kind === "turret" ? "turret" : "other");
+
+/* ------------------------------------------------------------------ buttons */
+/* Hold-to-move: every step is an ordinary jog that the gate checks; the next one is sent only after the last one
+   finished ok and while the button is still held. Letting go sends nothing more (the step that is running
+   finishes; an arm has no stop command, so no stop is sent). */
 let activeHold = null;
 function releaseHold() { if (activeHold) { activeHold.held = false; activeHold = null; } }
 window.addEventListener("blur", releaseHold);
 document.addEventListener("visibilitychange", () => { if (document.hidden) releaseHold(); });
 
 function holdButton(mod, label, paramsFn, tip) {
-  const b = h("button", { type: "button", class: "hold", "data-action": "jog", "data-tip": tip, title: tip, "aria-label": tip }, label);
+  const b = h("button", { type: "button", class: "step", "data-action": "jog", "data-tip": tip, title: tip, "aria-label": tip }, label);
   const run = async (hold) => {
     const m = modules[mod];
     if (m.stepping) { releaseHold(); return; }  // one stepping loop per module
@@ -182,158 +177,347 @@ function numInput(value, min, max, step, title) {
   return h("input", { type: "number", value, min, max, step, title, "aria-label": title });
 }
 
-function buildRow(mod, d) {
-  const m = modules[mod];
-  const row = h("div", { class: "dev", id: `dev-${mod}-${d.id}` });
-  const name = h("div", {}, h("div", { class: "devname" }, h("span", { class: "dot" }), d.id), h("div", { class: "devkind" }, d.kind + (d.source ? `, values from ${d.source}` : "")));
-  const read = h("div", { class: "read" });
-  const err = h("div", { class: "err" });
-  const ctl = h("div", { class: "ctl" });
-  row.append(name, read, err, ctl);
-
-  const jog = JOG[d.kind];
-  if (jog && m.describe.commands.jog) {
-    const step = h("select", { "aria-label": "jog step" }, (devMode ? DEV_STEPS[d.kind] : jog.steps).map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
-    ctl.append(h("label", { class: "muted" }, "step ", step));
-    for (const axis of jog.axes) {
-      ctl.append(h("span", { class: "jog" },
-        holdButton(mod, "-", () => ({ device: d.id, axis, mm: -Number(step.value) }), `${d.id} ${axis} minus: click = one step, hold = keep stepping`),
-        h("b", {}, axis),
-        holdButton(mod, "+", () => ({ device: d.id, axis, mm: Number(step.value) }), `${d.id} ${axis} plus: click = one step, hold = keep stepping`)));
-    }
-  }
-  if (jog && m.describe.commands.move_axis) ctl.append(moveTo(mod, d, jog.axes));
-  if (d.kind === "arm") {
-    ctl.append(guarded(mod, "arm_suction", "Suction on", () => ({ device: d.id, on: true })),
-               guarded(mod, "arm_suction", "Suction off", () => ({ device: d.id, on: false })));
-    if (m.describe.commands.rotate_nozzle) {
-      // v1 M2101 R<integer deg>; the arm does not report its nozzle angle, the page shows the last command
-      const deg = numInput(0, -180, 180, 1, "nozzle degrees");
-      ctl.append(h("label", { class: "muted" }, "nozzle ", deg, " deg"),
-                 guarded(mod, "rotate_nozzle", "Rotate nozzle", () => {
-                   const v = Math.round(Number(deg.value));
-                   if (!Number.isFinite(v) || v < -180 || v > 180) return null;
-                   return { device: d.id, deg: v };
-                 }));
-    }
-  }
-  if (d.kind === "turret") {
-    for (const mag of [5, 10, 20, 100]) ctl.append(guarded(mod, "set_objective", `${mag}x`, () => ({ objective: mag })));
-  }
-  if (d.kind === "switch") {
-    // Development mode: no auto-off cap; leave the box empty to keep the switch on until Off.
-    const auto = devMode ? numInput("", 1, 86400, 1, "auto-off seconds (empty = stays on)") : numInput(10, 1, 10, 1, "auto-off seconds");
-    ctl.append(guarded(mod, "set_switch", "On", () => (auto.value === "" ? { device: d.id, on: true } : { device: d.id, on: true, auto_off_s: Number(auto.value) })),
-               h("label", { class: "muted" }, "auto-off ", auto, " s"),
-               guarded(mod, "set_switch", "Off", () => ({ device: d.id, on: false })));
-  }
-  if (d.kind === "heater") {
-    // Development mode: no first-heat caps on the page either; the service still refuses targets above the
-    // heater's max_c and timeouts above its max. Empty volts = the heater's own boost/hold voltages.
-    const t = devMode ? numInput(30, 1, 175, 1, "target C") : numInput(30, 1, 40, 1, "target C");
-    const to = devMode ? numInput(300, 10, 7200, 10, "timeout s") : numInput(300, 10, 600, 10, "timeout s");
-    const v = devMode ? numInput("", 0.5, 30, 0.5, "volts (empty = heater's own boost/hold)") : numInput(6.5, 0.5, 6.5, 0.5, "volts");
-    ctl.append(h("label", { class: "muted" }, "target ", t, " C"), h("label", { class: "muted" }, "timeout ", to, " s"),
-               h("label", { class: "muted" }, "at ", v, " V"),
-               guarded(mod, "heat", "Heat", () => {
-                 const p = { device: d.id, target_c: Number(t.value), timeout_s: Number(to.value) };
-                 if (v.value !== "") p.volts = Number(v.value);
-                 return p;
-               }, "primary"),
-               guarded(mod, "heat_off", "Heat off", () => ({ device: d.id })));
-  }
-  if (d.kind === "camera") {
-    row.classList.add("cam");
-    const live = cameraLive(mod, d.id);
-    ctl.append(live.toggle, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
-    const last = h("a", { class: "lastcap", target: "_blank", rel: "noopener", hidden: "" },
-      h("img", { class: "thumb", alt: `last captured picture from ${d.id}` }), h("span", { class: "muted" }, "last capture"));
-    row.append(h("div", { class: "liveview" }, live.figure, last));
-  }
-  if (d.kind === "tape_reels" && m.describe.commands.advance_tape) {
-    const deg = devMode ? numInput(5, 0.1, 3600, 1, "degrees") : numInput(5, 1, 10, 1, "degrees");
-    ctl.append(h("label", { class: "muted" }, "feed tape ", deg, " deg"), guarded(mod, "advance_tape", "Advance", () => ({ deg: Number(deg.value) })));
-  }
-  if (d.kind === "gantry" && m.describe.commands.apply_tape) {
-    const sp = numInput(500, 50, 500, 50, "peel speed");
-    ctl.append(guarded(mod, "gantry_power", "Motors on", () => ({ on: true })), guarded(mod, "gantry_power", "Motors off", () => ({ on: false })),
-               guarded(mod, "apply_tape", "Apply tape"), h("label", { class: "muted" }, "peel at ", sp, " mm/min"),
-               guarded(mod, "peel_tape", "Peel tape", () => ({ speed: Number(sp.value) })));
-  }
-  if (m.describe.commands.read) ctl.append(guarded(mod, "read", "Read", () => ({ device: d.id })));
-  return row;
-}
-
-function renderRow(m, mod, id, st) {
-  const row = document.getElementById(`dev-${mod}-${id}`);
-  if (!row || !st) return;
-  $(".dot", row).classList.toggle("on", !!st.connected);
-  const keys = READ_KEYS[st.kind] || Object.keys(st).filter((k) => !["kind", "connected", "error"].includes(k)).map((k) => [k, k, ""]);
-  const read = $(".read", row);
-  read.replaceChildren(...keys.filter(([k]) => k in st).map(([k, label, unit]) => {
-    const big = st.kind === "heater" && k === "temp_c";
-    let val = fmt(st[k], st.kind === "focus" || unit === "C" ? 1 : 3);
-    if (k === "last_image_id" && st[k]) val = st[k].split("-").slice(-2).join("-");  // time + short id
-    return h("span", {}, label ? h("span", { class: "k" }, label) : null, h("span", { class: "v" + (big ? " big" : "") }, val), unit ? h("span", { class: "u" }, unit) : null);
-  }));
-  if (st.kind === "heater" && st.deadline_unix && st.phase !== "off") {
-    read.append(h("span", {}, h("span", { class: "k" }, "off in"), h("span", { class: "v" }, Math.max(0, Math.round(st.deadline_unix - Date.now() / 1000))), h("span", { class: "u" }, "s")));
-  }
-  $(".err", row).textContent = st.error ? st.error : "";
-  if (st.kind === "camera" && st.last_image_id) {
-    const a = $("a.lastcap", row);
-    const src = `/m/${mod}/api/images/${encodeURIComponent(st.last_image_id)}`;
-    if (a && a.dataset.src !== src) { a.dataset.src = src; a.href = src; $("img", a).src = src; a.hidden = false; }
-  }
-  const mv = $(".moveto", row);
-  if (mv) {
-    const inp = $("input", mv);
-    const cur = st[axisKey(st.kind, $("select", mv).value)];
-    $(".now", mv).textContent = `now ${fmt(cur, st.kind === "focus" ? 1 : 3)}`;
-    if (inp.value === "" && typeof cur === "number" && document.activeElement !== inp) inp.value = String(Number(cur.toFixed(4)));
-  }
-}
-
 function refreshGuards(m) {
   for (const b of m.el.querySelectorAll("button[data-action]")) {
     if (b.classList.contains("holding")) continue;
+    if (b.dataset.busy === "1") { b.disabled = true; continue; }
     const g = canRun(m, b.dataset.action);
     b.disabled = !g.ok;
     b.title = g.ok ? (b.dataset.tip || "") : g.why;
   }
 }
 
-/* Typed target for one axis. Arm, stage, gantry and stamp rail have no distance cap (stamp x/y 1 mm, focus
-   500 um); stamp z and arm z down keep the jog cap. The service reads the position again before it moves. */
-function moveTo(mod, d, axes) {
-  const unit = axisUnit(d.kind);
-  const axis = h("select", { "aria-label": `${d.id} axis to move` }, axes.map((a) => h("option", { value: a }, a)));
-  const target = h("input", { type: "number", step: d.kind === "focus" ? "1" : "0.01", "aria-label": `${d.id} target (${unit})` });
-  const now = h("span", { class: "now muted" }, "");
-  axis.addEventListener("change", () => { target.value = ""; renderRow(modules[mod], mod, d.id, modules[mod].state && modules[mod].state.devices[d.id]); });
-  const go = guarded(mod, "move_axis", "Move", () => {
-    const st = modules[mod].state && modules[mod].state.devices[d.id];
-    const cur = st ? st[axisKey(d.kind, axis.value)] : null;
-    const t = Number(target.value);
-    if (target.value === "" || !Number.isFinite(t)) { flash(mod, "type a target position first", "failed"); return null; }
-    if (!devMode && !confirm(`Move ${d.id} ${axis.value} from ${fmt(cur)} to ${t} ${unit}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
-    return { device: d.id, axis: axis.value, target: t };
-  });
-  go.dataset.tip = devMode ? "Move one axis to the typed position (development mode: no distance cap, axis ranges still apply)" : `Move one axis to the typed position${d.kind === "focus" ? " (at most 500 um away)" : d.kind === "manipulator" ? " (stamp x/y at most 1 mm, z 0.1 mm away)" : " (no distance cap; arm z down 0.5 mm until min_z is measured)"}`;
-  return h("span", { class: "moveto" }, h("span", { class: "muted" }, "move "), axis, h("span", { class: "muted" }, " to "), target,
-    h("span", { class: "muted" }, ` ${unit} `), go, now);
+/* ------------------------------------------------------------------ cards */
+function card(mod, d, extraClass = "") {
+  const el = h("article", { class: `card ${extraClass}`, id: `dev-${mod}-${d.id}` });
+  el.append(h("div", { class: "card__head" }, h("span", { class: "dot" }), h("span", { class: "card__name" }, d.id),
+    h("span", { class: "card__kind" }, d.kind + (d.source ? ` · values from ${d.source}` : ""))));
+  return el;
 }
 
+/* One moving device: a position box per axis (live value until you type), steps, go to point. */
+function motionCard(mod, d) {
+  const m = modules[mod];
+  const el = card(mod, d);
+  const unit = axisUnit(d.kind);
+  const axes = MOTION[d.kind];
+  const steps = devMode ? DEV_STEPS[d.kind] : STEPS[d.kind];
+  const step = h("select", { "aria-label": `${d.id} step` }, steps.map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
+  const head = h("div", { class: "pos__head" }, h("span", { class: "muted small" }, `Position (${unit})`));
+  if (m.describe.commands.jog) head.append(h("label", {}, "step ", step));
+  el.append(head);
+  const rows = {};
+  const ui = { el, rows, kind: d.kind, id: d.id };
+  for (const axis of axes) {
+    const inp = h("input", { type: "number", step: d.kind === "focus" ? "1" : "0.01", "aria-label": `${d.id} ${axis} (${unit})`, class: "mono" });
+    const now = h("div", { class: "axis__now" });
+    inp.addEventListener("input", () => { inp.classList.add("dirty"); renderMotion(m, mod, ui, m.state && m.state.devices[d.id]); });
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); moveEdited(mod, ui); }
+      if (e.key === "Escape") { inp.classList.remove("dirty"); inp.value = ""; renderMotion(m, mod, ui, m.state && m.state.devices[d.id]); inp.blur(); }
+    });
+    const row = h("div", { class: "axis" }, h("span", { class: "axis__name" }, axis, h("span", { class: "axis__unit" }, unit)), inp);
+    if (m.describe.commands.jog) {
+      row.append(holdButton(mod, "−", () => ({ device: d.id, axis, mm: -Number(step.value) }), `${d.id} ${axis} minus: click = one step, hold = keep stepping`),
+                 holdButton(mod, "+", () => ({ device: d.id, axis, mm: Number(step.value) }), `${d.id} ${axis} plus: click = one step, hold = keep stepping`));
+    } else row.append(h("span"), h("span"));
+    row.append(now);
+    rows[axis] = { inp, now };
+    el.append(row);
+  }
+  if (d.kind === "arm" && m.describe.commands.rotate_nozzle) {
+    // v1 M2101 R<integer deg>; the arm does not report its nozzle angle: the box shows the last command
+    const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle (deg)`, class: "mono", placeholder: "not sent yet" });
+    const now = h("div", { class: "axis__now" }, "last angle sent; the arm cannot report it");
+    const rot = guarded(mod, "rotate_nozzle", "Rotate", () => {
+      const v = Math.round(Number(inp.value));
+      if (inp.value === "" || !Number.isFinite(v) || v < -180 || v > 180) { flash(mod, "nozzle angle must be -180 to 180", "failed"); return null; }
+      inp.classList.remove("dirty");
+      return { device: d.id, deg: v };
+    }, "sm");
+    inp.addEventListener("input", () => inp.classList.add("dirty"));
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); rot.click(); } });
+    el.append(h("div", { class: "axis axis--note" }, h("span", { class: "axis__name" }, "nozzle", h("span", { class: "axis__unit" }, "deg")), inp, rot, h("span"), now));
+    rows.nozzle = { inp, now, nozzle: true };
+  }
+  if (m.describe.commands.move_axis) {
+    const go = h("button", { type: "button", class: "primary sm", "data-action": "move_axis",
+      "data-tip": devMode ? "Move the edited axes (no distance cap in development mode; axis ranges still apply)" : "Move the edited axes" }, "Move");
+    go.addEventListener("click", () => moveEdited(mod, ui));
+    const reset = h("button", { type: "button", class: "sm", onclick: () => resetEdits(m, mod, ui) }, "Reset");
+    ui.go = go;
+    el.append(h("div", { class: "pos__go" }, go, reset));
+  }
+  const facts = h("div", { class: "facts" });
+  el.append(facts);
+  ui.facts = facts;
+  if (d.points && d.points.length && m.describe.commands.go_to_point) {
+    const sel = h("select", { "aria-label": `${d.id} point` }, d.points.map((p) => h("option", { value: `${d.id}.${p}` }, p)));
+    const go = guarded(mod, "go_to_point", "Go", () => {
+      const p = sel.value;
+      if (!devMode && !confirm(`Move to ${p}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
+      return { point: p };
+    }, "sm");
+    el.append(h("div", { class: "goto" }, h("span", { class: "muted small" }, "Go to point"), sel, go));
+  }
+  const act = h("div", { class: "actions" });
+  if (d.kind === "arm") {
+    act.append(guarded(mod, "arm_suction", "Suction on", () => ({ device: d.id, on: true }), "sm"),
+               guarded(mod, "arm_suction", "Suction off", () => ({ device: d.id, on: false }), "sm"));
+  }
+  if (d.kind === "gantry" && m.describe.commands.gantry_power) {
+    act.append(guarded(mod, "gantry_power", "Motors on", () => ({ on: true }), "sm"), guarded(mod, "gantry_power", "Motors off", () => ({ on: false }), "sm"));
+  }
+  if (d.kind === "gantry" && m.describe.commands.apply_tape) {
+    const sp = numInput(500, 50, 500, 50, "peel speed");
+    act.append(guarded(mod, "apply_tape", "Apply tape", null, "sm"), h("label", {}, "peel at ", sp, " mm/min"),
+               guarded(mod, "peel_tape", "Peel tape", () => ({ speed: Number(sp.value) }), "sm"));
+  }
+  if (m.describe.commands.read) act.append(guarded(mod, "read", "Read", () => ({ device: d.id }), "sm"));
+  if (act.childNodes.length) el.append(h("div", { class: "sep" }), act);
+  el.append(h("div", { class: "err" }));
+  m.cards[d.id] = { ...ui, render: (st) => renderMotion(m, mod, ui, st) };
+  return el;
+}
+
+function resetEdits(m, mod, ui) {
+  for (const r of Object.values(ui.rows)) { r.inp.classList.remove("dirty"); r.inp.value = ""; }
+  renderMotion(m, mod, ui, m.state && m.state.devices[ui.id]);
+}
+
+/* Move every edited axis, one after another: z up first, other axes, z down last (no sweep while low). */
+async function moveEdited(mod, ui) {
+  const m = modules[mod];
+  const st = m.state && m.state.devices[ui.id];
+  const plan = [];
+  for (const [axis, r] of Object.entries(ui.rows)) {
+    if (r.nozzle || !r.inp.classList.contains("dirty")) continue;
+    const t = Number(r.inp.value);
+    if (r.inp.value === "" || !Number.isFinite(t)) { flash(mod, `${ui.id} ${axis}: type a number`, "failed"); return; }
+    const cur = st ? st[axisKey(ui.kind, axis)] : null;
+    plan.push({ axis, target: t, cur });
+  }
+  if (!plan.length) { flash(mod, "type a new value in a position box first", "failed"); return; }
+  const rank = (p) => (p.axis !== "z" ? 1 : (typeof p.cur === "number" && p.target >= p.cur ? 0 : 2));
+  plan.sort((a, b) => rank(a) - rank(b));
+  const unit = axisUnit(ui.kind);
+  const text = plan.map((p) => `${p.axis} ${fmt(p.cur)} → ${p.target} ${unit}`).join(", ");
+  if (!devMode && !confirm(`Move ${ui.id}: ${text}? Watch the instrument; STOP ALL is at the bottom.`)) return;
+  if (ui.go) { ui.go.dataset.busy = "1"; ui.go.disabled = true; }
+  try {
+    for (const p of plan) {
+      const r = await send(mod, "move_axis", { device: ui.id, axis: p.axis, target: p.target });
+      if (r.status !== 202) return;
+      const lc = await waitDone(mod, r.data.command_id, 180000);
+      if (!lc || lc.result !== "ok") { flash(mod, `${ui.id} ${p.axis}: ${lc ? lc.result + (lc.message ? ", " + lc.message : "") : "no answer"}`, "failed"); return; }
+      const row = ui.rows[p.axis];
+      row.inp.classList.remove("dirty");
+      row.inp.value = "";
+    }
+  } finally {
+    if (ui.go) delete ui.go.dataset.busy;
+    refreshGuards(m);
+    renderMotion(m, mod, ui, m.state && m.state.devices[ui.id]);
+  }
+}
+
+function renderMotion(m, mod, ui, st) {
+  if (!st) return;
+  $(".dot", ui.el).className = "dot " + (st.connected ? "ok" : "bad");
+  for (const [axis, r] of Object.entries(ui.rows)) {
+    if (r.nozzle) {
+      if (!r.inp.classList.contains("dirty") && document.activeElement !== r.inp) r.inp.value = st.nozzle_deg === null || st.nozzle_deg === undefined ? "" : String(st.nozzle_deg);
+      continue;
+    }
+    const cur = st[axisKey(ui.kind, axis)];
+    const digits = ui.kind === "focus" ? 1 : 3;
+    if (r.inp.classList.contains("dirty")) {
+      r.now.textContent = `now ${fmt(cur, digits)}`;
+    } else {
+      r.now.textContent = "";  // not edited: the box follows the live value (typing marks it edited first)
+      r.inp.value = typeof cur === "number" ? cur.toFixed(digits) : "";
+    }
+  }
+  ui.facts.replaceChildren(...(FACTS[ui.kind] || []).filter(([k]) => k in st).map(([k, label, unit]) =>
+    h("span", {}, `${label} `, h("b", {}, fmt(st[k]) + (unit ? ` ${unit}` : "")))));
+  $(".err", ui.el).textContent = st.error || "";
+}
+
+function heaterCard(mod, d) {
+  const m = modules[mod];
+  const el = card(mod, d);
+  const temp = h("div", { class: "figure" }, "n/a");
+  const facts = h("div", { class: "facts" });
+  // Development mode: no first-heat caps on the page either; the service still refuses targets above the
+  // heater's max_c and timeouts above its max. Empty volts = the heater's own boost/hold voltages.
+  const t = devMode ? numInput(30, 1, 175, 1, "target C") : numInput(30, 1, 40, 1, "target C");
+  const to = devMode ? numInput(300, 10, 7200, 10, "timeout s") : numInput(300, 10, 600, 10, "timeout s");
+  const v = devMode ? numInput("", 0.5, 30, 0.5, "volts (empty = heater's own boost/hold)") : numInput(6.5, 0.5, 6.5, 0.5, "volts");
+  el.append(temp, facts,
+    h("div", { class: "actions" }, h("label", {}, "target ", t, " C"), h("label", {}, "for ", to, " s"), h("label", {}, "at ", v, " V")),
+    h("div", { class: "actions" },
+      guarded(mod, "heat", "Heat", () => {
+        const p = { device: d.id, target_c: Number(t.value), timeout_s: Number(to.value) };
+        if (v.value !== "") p.volts = Number(v.value);
+        return p;
+      }, "primary"),
+      guarded(mod, "heat_off", "Heat off", () => ({ device: d.id })),
+      m.describe.commands.read ? guarded(mod, "read", "Read", () => ({ device: d.id }), "sm") : null),
+    h("div", { class: "err" }));
+  m.cards[d.id] = { el, render: (st) => {
+    $(".dot", el).className = "dot " + (!st.connected ? "bad" : st.phase && st.phase !== "off" ? "busy" : "ok");
+    temp.replaceChildren(fmt(st.temp_c, 1), h("small", {}, "°C"));
+    const f = [["target", st.target_c, "C"], ["set", st.set_v, "V"], ["phase", st.phase, ""]];
+    if (st.deadline_unix && st.phase !== "off") f.push(["off in", Math.max(0, Math.round(st.deadline_unix - Date.now() / 1000)), "s"]);
+    if (st.last_off_reason) f.push(["last off", st.last_off_reason, ""]);
+    facts.replaceChildren(...f.map(([k, val, u]) => h("span", {}, `${k} `, h("b", {}, fmt(val, 1) + (u ? ` ${u}` : "")))));
+    $(".err", el).textContent = st.error || "";
+  } };
+  return el;
+}
+
+function switchCard(mod, d) {
+  const m = modules[mod];
+  const el = card(mod, d);
+  const state = h("div", { class: "state" }, h("span", { class: "dot" }), "n/a");
+  // Development mode: no auto-off cap; leave the box empty to keep the switch on until Off.
+  const auto = devMode ? numInput("", 1, 86400, 1, "auto-off seconds (empty = stays on)") : numInput(10, 1, 10, 1, "auto-off seconds");
+  el.append(state, h("div", { class: "actions" },
+    guarded(mod, "set_switch", "On", () => (auto.value === "" ? { device: d.id, on: true } : { device: d.id, on: true, auto_off_s: Number(auto.value) }), "sm"),
+    guarded(mod, "set_switch", "Off", () => ({ device: d.id, on: false }), "sm"),
+    h("label", {}, "auto-off ", auto, " s")), h("div", { class: "err" }));
+  m.cards[d.id] = { el, render: (st) => {
+    $(".card__head .dot", el).className = "dot " + (st.connected ? "ok" : "bad");
+    const on = st.on;
+    state.replaceChildren(h("span", { class: "dot " + (on ? "ok" : "") }), on === null || on === undefined ? "unknown" : on ? "On" : "Off",
+      st.confirmed === false ? h("span", { class: "muted small" }, " (not confirmed)") : null);
+    $(".err", el).textContent = st.error || "";
+  } };
+  return el;
+}
+
+function genericCard(mod, d) {
+  const m = modules[mod];
+  const el = card(mod, d);
+  const facts = h("div", { class: "facts" });
+  el.append(facts);
+  const act = h("div", { class: "actions" });
+  if (d.kind === "tape_reels" && m.describe.commands.advance_tape) {
+    const deg = devMode ? numInput(5, 0.1, 3600, 1, "degrees") : numInput(5, 1, 10, 1, "degrees");
+    act.append(h("label", {}, "feed tape ", deg, " deg"), guarded(mod, "advance_tape", "Advance", () => ({ deg: Number(deg.value) }), "sm"));
+  }
+  if (d.kind === "turret") act.append(...objectiveButtons(mod));
+  if (m.describe.commands.read) act.append(guarded(mod, "read", "Read", () => ({ device: d.id }), "sm"));
+  if (act.childNodes.length) el.append(act);
+  el.append(h("div", { class: "err" }));
+  m.cards[d.id] = { el, render: (st) => {
+    $(".dot", el).className = "dot " + (st.connected ? "ok" : "bad");
+    const keys = Object.keys(st).filter((k) => !["kind", "connected", "error"].includes(k));
+    facts.replaceChildren(...keys.map((k) => h("span", {}, `${k.replace(/_/g, " ")} `, h("b", {}, fmt(st[k])))));
+    $(".err", el).textContent = st.error || "";
+  } };
+  return el;
+}
+
+function objectiveButtons(mod) {
+  return [5, 10, 20, 100].map((mag) => guarded(mod, "set_objective", `${mag}x`, () => ({ objective: mag }), "sm"));
+}
+
+/* ------------------------------------------------------------------ cameras (live preview, read only) */
+/* Each camera shows its live picture (about 5 per second, nothing saved) while its module is on screen, the page
+   is visible and Live is on. The service grabs frames only while someone asks for them. */
+const camLoops = {};
+
+function cameraCard(mod, d, turret) {
+  const m = modules[mod];
+  const main = d.id.includes("microscope");
+  const el = h("article", { class: "cam" + (main ? " cam--main" : ""), id: `dev-${mod}-${d.id}` });
+  const img = h("img", { alt: `Live picture from ${d.id}` });
+  const info = h("span", { class: "cam__info" }, "off");
+  const live = h("button", { type: "button", "aria-pressed": "false" }, "Live");
+  let saved = null;
+  try { saved = localStorage.getItem(`qumus-camlive-${d.id}`); } catch { saved = null; }
+  const c = { mod, img, info, on: saved !== "off", running: false, live };
+  camLoops[d.id] = c;
+  const sync = () => { live.classList.toggle("is-on", c.on); live.setAttribute("aria-pressed", String(c.on)); };
+  live.addEventListener("click", () => {
+    c.on = !c.on;
+    try { localStorage.setItem(`qumus-camlive-${d.id}`, c.on ? "on" : "off"); } catch { /* private window */ }
+    sync();
+    startCameras();
+  });
+  sync();
+  const last = h("a", { class: "cam__last", target: "_blank", rel: "noopener", hidden: "", title: "last captured picture" },
+    h("img", { alt: `last captured picture from ${d.id}` }));
+  const tools = h("div", { class: "cam__tools" }, live, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
+  const objective = h("span", { class: "cam__info" });
+  if (turret) tools.prepend(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
+  el.append(h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id), info, tools),
+    h("div", { class: "cam__view" }, img, last), h("div", { class: "err" }));
+  m.cards[d.id] = { el, render: (st) => {
+    $(".dot", el).className = "dot " + (st.connected ? "ok" : "bad");
+    if (st.last_image_id) {
+      const src = `/m/${mod}/api/images/${encodeURIComponent(st.last_image_id)}`;
+      if (last.dataset.src !== src) { last.dataset.src = src; last.href = src; $("img", last).src = src; last.hidden = false; }
+    }
+    $(".err", el).textContent = st.error || "";
+  } };
+  if (turret) {
+    m.cards[turret.id] = { el, render: (st) => { objective.textContent = st.objective ? `${st.objective}x` : "objective ?"; } };
+  }
+  return el;
+}
+
+const camWanted = (c) => c.on && c.mod === current && !document.hidden;
+
+function startCameras() {
+  for (const id of Object.keys(camLoops)) if (camWanted(camLoops[id])) camLoop(id);
+}
+
+async function camLoop(id) {
+  const c = camLoops[id];
+  if (c.running) return;
+  c.running = true;
+  c.info.textContent = "loading";
+  while (camWanted(c)) {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`/cam/${id}?t=${t0}`, { cache: "no-store" });
+      if (r.ok) {
+        const old = c.img.src;
+        c.img.src = URL.createObjectURL(await r.blob());
+        if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+        c.info.textContent = `live ${new Date().toLocaleTimeString()}`;
+        c.info.className = "cam__info";
+      } else {
+        const body = await r.json().catch(() => ({}));
+        c.info.textContent = body.error || `error ${r.status}`;
+        c.info.className = "cam__info warn";
+      }
+    } catch (e) {
+      c.info.textContent = "not reachable";
+      c.info.className = "cam__info warn";
+    }
+    await sleep(Math.max(80, 200 - (Date.now() - t0)));
+  }
+  c.info.textContent = c.on ? "paused" : "off";
+  c.info.className = "cam__info";
+  c.running = false;
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) startCameras(); });
+
+/* ------------------------------------------------------------------ status bar */
 function renderStatus(m) {
   const st = m.state;
   const box = $(".status", m.el);
-  if (!st) { box.textContent = "service not reachable"; return; }
+  if (!st) { box.replaceChildren(h("span", { class: "pill locked" }, "Service not reachable")); return; }
   const parts = [];
-  parts.push(st.locked ? h("span", { class: "pill locked" }, "Locked") : h("span", { class: "pill ok" }, st.busy ? `Busy: ${st.busy_action}` : "Ready"));
+  parts.push(st.locked ? h("span", { class: "pill locked" }, "Locked")
+    : h("span", { class: "pill" }, h("span", { class: "dot " + (st.busy ? "busy" : "ok") }), st.busy ? `Busy: ${st.busy_action}` : "Ready"));
   if (st.locked && st.fault) parts.push(h("span", {}, `${st.fault.code}: ${st.fault.message}`));
-  if (st.locked) parts.push(h("button", { type: "button", class: "primary", onclick: () => unlock(m.name) }, "Unlock"));
+  if (st.locked) parts.push(h("button", { type: "button", class: "primary sm", onclick: () => unlock(m.name) }, "Unlock"));
   const lease = st.lease ? (st.lease.holder === CLIENT ? "you have control" : `controlled by ${st.lease.holder}`) : "nobody has control";
-  parts.push(h("span", { class: "muted" }, lease));
+  parts.push(h("span", { class: "muted small" }, lease));
   for (const [zone, z] of Object.entries(st.zones || {})) parts.push(...zoneParts(m, zone, z));
   const lc = st.last_command;
   const flashNewer = m.flash && m.flash.until > Date.now() && !(lc && lc.finished_at * 1000 > m.flash.at);
@@ -347,21 +531,21 @@ function zoneParts(m, zone, z) {
   const label = zone.replace(/_/g, " ");
   const c = m.describe.commands.zone_acquire;
   const arms = c ? c.params.properties.device.enum : [];
-  const out = [h("span", { class: "zone" + (z.holder ? " held" : "") },
+  const out = [h("span", { class: "zone" + (z.holder ? " held" : "") }, h("span", { class: "dot " + (z.holder ? "busy" : "ok") }),
     z.holder ? `${label}: held by ${z.holder}${z.inside.length ? " (inside)" : ""}` : `${label}: free`)];
   const ctl = canRun(m, "zone_acquire");
   for (const arm of arms) {
     if (!z.holder) {
-      out.push(h("button", { type: "button", disabled: ctl.ok ? undefined : "", title: ctl.ok ? "" : ctl.why,
+      out.push(h("button", { type: "button", class: "sm", disabled: ctl.ok ? undefined : "", title: ctl.ok ? "" : ctl.why,
         onclick: () => send(m.name, "zone_acquire", { zone, device: arm }) }, `Take for ${arm}`));
     } else if (z.holder === arm) {
-      out.push(h("button", { type: "button", disabled: ctl.ok && !z.inside.length ? undefined : "",
+      out.push(h("button", { type: "button", class: "sm", disabled: ctl.ok && !z.inside.length ? undefined : "",
         title: z.inside.length ? "move the arm out first" : (ctl.ok ? "" : ctl.why),
         onclick: () => send(m.name, "zone_release", { zone, device: arm }) }, "Release"));
     }
   }
   if (z.holder) {
-    out.push(h("button", { type: "button", onclick: () => {
+    out.push(h("button", { type: "button", class: "sm", onclick: () => {
       if (confirm(`Clear ${label}? Only after you checked by eye that no arm is in it.`)) send(m.name, "zone_clear", { zone });
     } }, "Clear"));
   }
@@ -381,9 +565,9 @@ async function pollState() {
       const r = await api(name, "GET", "/api/state");
       m.state = r.status === 200 ? r.data : null;
     } catch { m.state = null; }
-    if (m.state) for (const [id, st] of Object.entries(m.state.devices)) renderRow(m, name, id, st);
+    if (m.state) for (const [id, st] of Object.entries(m.state.devices)) if (m.cards[id]) m.cards[id].render(st);
     renderStatus(m);
-    renderNav(m);
+    renderTab(m);
     refreshGuards(m);
   }
   const holders = Object.values(modules).map((m) => m.state && m.state.lease && m.state.lease.holder).filter(Boolean);
@@ -435,80 +619,21 @@ async function stopAll() {
   $("#stopresult").textContent = "Stop " + out.join(", ");
 }
 
-/* ------------------------------------------------------------------ cameras (live preview, read only) */
-/* Each camera row shows its live picture (about 5 per second, nothing saved) while its module is on screen,
-   the page is visible and "Live" is ticked. The service grabs frames only while someone asks for them. */
-const camLoops = {};
-
-function cameraLive(mod, id) {
-  const img = h("img", { alt: `Live picture from ${id}` });
-  const info = h("span", { class: "muted" }, "off");
-  const box = h("input", { type: "checkbox" });
-  let saved = null;
-  try { saved = localStorage.getItem(`qumus-camlive-${id}`); } catch { saved = null; }
-  box.checked = saved !== "off";
-  box.addEventListener("change", () => {
-    try { localStorage.setItem(`qumus-camlive-${id}`, box.checked ? "on" : "off"); } catch { /* private window */ }
-    startCameras();
-  });
-  camLoops[id] = { mod, img, info, box, running: false };
-  return { toggle: h("label", { class: "muted camtoggle" }, box, " Live"),
-           figure: h("figure", { class: "live" }, img, h("figcaption", {}, info)) };
+/* ------------------------------------------------------------------ module tabs */
+function tabFor(name, title, service) {
+  const state = h("span", { class: "tabstate" }, "connecting");
+  const dot = h("span", { class: "dot" });
+  const b = h("button", { type: "button", class: "tab", role: "tab", title: service, onclick: () => select(name) }, dot, title, state);
+  return { button: b, state, dot };
 }
 
-const camWanted = (c) => c.box.checked && c.mod === current && !document.hidden;
-
-function startCameras() {
-  for (const id of Object.keys(camLoops)) if (camWanted(camLoops[id])) camLoop(id);
-}
-
-async function camLoop(id) {
-  const c = camLoops[id];
-  if (c.running) return;
-  c.running = true;
-  c.info.textContent = "loading";
-  while (camWanted(c)) {
-    const t0 = Date.now();
-    try {
-      const r = await fetch(`/cam/${id}?t=${t0}`, { cache: "no-store" });
-      if (r.ok) {
-        const old = c.img.src;
-        c.img.src = URL.createObjectURL(await r.blob());
-        if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-        c.info.textContent = `live, ${new Date().toLocaleTimeString()}`;
-        c.info.className = "muted";
-      } else {
-        const body = await r.json().catch(() => ({}));
-        c.info.textContent = body.error || `error ${r.status}`;
-        c.info.className = "warn";
-      }
-    } catch (e) {
-      c.info.textContent = "not reachable";
-      c.info.className = "warn";
-    }
-    await sleep(Math.max(80, 200 - (Date.now() - t0)));
-  }
-  c.info.textContent = c.box.checked ? "paused" : "off";
-  c.info.className = "muted";
-  c.running = false;
-}
-document.addEventListener("visibilitychange", () => { if (!document.hidden) startCameras(); });
-
-/* ------------------------------------------------------------------ module switcher (left column) */
-function navItem(name, title, service) {
-  const state = h("span", { class: "navstate" }, "connecting");
-  const b = h("button", { type: "button", onclick: () => select(name) },
-    h("span", { class: "navname" }, title), h("span", { class: "navport muted" }, service), state);
-  return { li: h("li", {}, b), button: b, state };
-}
-
-function renderNav(m) {
+function renderTab(m) {
   const st = m.state;
-  const s = m.nav.state;
-  if (!st) { s.textContent = "not reachable"; s.className = "navstate locked"; return; }
-  if (st.locked) { s.textContent = "Locked"; s.className = "navstate locked"; return; }
-  s.textContent = st.busy ? `Busy: ${st.busy_action}` : "Ready";
-  s.className = "navstate " + (st.busy ? "busy" : "ok");
+  const t = m.tab;
+  if (!st) { t.state.textContent = "not reachable"; t.dot.className = "dot bad"; return; }
+  if (st.locked) { t.state.textContent = "locked"; t.dot.className = "dot bad"; return; }
+  t.state.textContent = st.busy ? `busy: ${st.busy_action}` : "ready";
+  t.dot.className = "dot " + (st.busy ? "busy" : "ok");
 }
 
 function select(name) {
@@ -516,51 +641,65 @@ function select(name) {
   current = name;
   for (const [n, m] of Object.entries(modules)) {
     m.el.hidden = n !== name;
-    if (n === name) m.nav.button.setAttribute("aria-current", "page"); else m.nav.button.removeAttribute("aria-current");
+    m.tab.button.classList.toggle("is-active", n === name);
+    m.tab.button.setAttribute("aria-selected", String(n === name));
   }
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
   startCameras();
 }
 
 /* ------------------------------------------------------------------ boot */
+function buildModule(name, d) {
+  const el = $("#tpl-module").content.firstElementChild.cloneNode(true);
+  const m = { name, describe: d, el, state: null, evNext: 0, cards: {} };
+  modules[name] = m;
+  const readall = $(".readall", el);
+  readall.dataset.action = "read_all";
+  readall.addEventListener("click", () => send(name, "read_all"));
+  const turret = d.devices.find((x) => x.kind === "turret");
+  const scope = d.devices.find((x) => x.kind === "camera" && x.id.includes("microscope"));
+  const cams = d.devices.filter((x) => x.kind === "camera").sort((a, b) => (b === scope) - (a === scope));
+  for (const dev of cams) $(".cams", el).append(cameraCard(name, dev, dev === scope ? turret : null));
+  for (const dev of d.devices) {
+    const g = GROUP(dev.kind);
+    if (g === "cams" || (g === "turret" && scope)) continue;
+    if (g === "motion") $(".motion", el).append(motionCard(name, dev));
+    else if (dev.kind === "heater") $(".io", el).append(heaterCard(name, dev));
+    else if (dev.kind === "switch") $(".io", el).append(switchCard(name, dev));
+    else $(".other", el).append(genericCard(name, dev));
+  }
+  for (const [band, grid] of [["band--cams", ".cams"], ["band--motion", ".motion"], ["band--io", ".io"], ["band--other", ".other"]]) {
+    if (!$(grid, el).childElementCount) $(`.${band}`, el).classList.add("is-empty");
+  }
+  if (!d.commands.jog && !d.commands.move_axis) $(".howto", el).hidden = true;
+  m.tab = tabFor(name, MODULE_TITLES[name] || name, d.service);
+  $("#modnav").append(m.tab.button);
+  return el;
+}
+
 async function boot() {
   const list = await (await fetch("/modules.json")).json();
   const bench = $("#bench");
   let anyDemo = false;
+  const described = [];
   for (const name of list.modules) {
     const d = (await api(name, "GET", "/api/describe")).data;
     devMode = devMode || Boolean(d.dev_mode);
-    const el = $("#tpl-module").content.firstElementChild.cloneNode(true);
-    $("h2", el).textContent = MODULE_TITLES[name] || name;
-    $(".port", el).textContent = d.service;
-    const m = { name, describe: d, el, state: null, evNext: 0 };
-    modules[name] = m;
-    $(".readall", el).dataset.action = "read_all";
-    $(".readall", el).addEventListener("click", () => send(name, "read_all"));
-    const pts = d.commands.go_to_point ? d.commands.go_to_point.params.properties.point.enum : [];
-    $(".points", el).replaceChildren(...pts.map((p) => h("option", { value: p }, p)));
-    const go = $(".go", el);
-    go.dataset.action = "go_to_point";
-    go.addEventListener("click", () => {
-      const p = $(".points", el).value;
-      if (devMode || confirm(`Move to ${p}? Watch the instrument; STOP ALL is at the bottom.`)) send(name, "go_to_point", { point: p });
-    });
-    if (!pts.length) $(".goto", el).hidden = true;
-    for (const dev of d.devices) $(".devices", el).append(buildRow(name, dev));
-    if (!d.commands.jog) $(".howto", el).hidden = true;
-    m.nav = navItem(name, MODULE_TITLES[name] || name, d.service);
-    $("#modnav").append(m.nav.li);
-    bench.append(el);
     anyDemo = anyDemo || d.demo;
+    described.push([name, d]);
   }
+  for (const [name, d] of described) bench.append(buildModule(name, d));
   if (devMode) $("#devmode").hidden = false;
   select(location.hash.slice(1));
   window.addEventListener("hashchange", () => select(location.hash.slice(1)));
   const mode = $("#mode");
-  mode.textContent = anyDemo ? "Demo: simulated devices" : "Real instruments";
-  mode.className = "mode " + (anyDemo ? "demo" : "real");
-  $("#take").addEventListener("change", async (e) => {
-    control = e.target.checked;
+  mode.textContent = anyDemo ? "Demo · simulated" : "Real instruments";
+  mode.className = "badge " + (anyDemo ? "demo" : "real");
+  const take = $("#take");
+  take.addEventListener("click", async () => {
+    control = !control;
+    take.setAttribute("aria-pressed", String(control));
+    take.textContent = control ? "Release control" : "Take control";
     if (control) await heartbeat();
     else for (const name of Object.keys(modules)) await api(name, "POST", "/api/release", {});
     pollState();
@@ -577,4 +716,4 @@ async function boot() {
   pollEvents();
 }
 
-boot().catch((e) => { document.body.prepend(h("p", { class: "err" }, `Debug page failed to start: ${e}`)); });
+boot().catch((e) => { document.body.prepend(h("p", { class: "fatal" }, `Debug page failed to start: ${e}`)); });
