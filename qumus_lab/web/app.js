@@ -430,11 +430,10 @@ const camLoops = {};
 
 function cameraCard(mod, d, turret) {
   const m = modules[mod];
-  const main = d.id.includes("microscope");
-  const el = h("article", { class: "cam" + (main ? " cam--main" : ""), id: `dev-${mod}-${d.id}` });
+  const el = h("article", { class: "cam", id: `dev-${mod}-${d.id}` });
   const img = h("img", { alt: `Live picture from ${d.id}` });
   const info = h("span", { class: "cam__info" }, "off");
-  const live = h("button", { type: "button", "aria-pressed": "false" }, "Live");
+  const live = h("button", { type: "button", "aria-pressed": "false", title: "live picture on / off" }, "Live");
   let saved = null;
   try { saved = localStorage.getItem(`qumus-camlive-${d.id}`); } catch { saved = null; }
   const c = { mod, img, info, on: saved !== "off", running: false, live };
@@ -451,9 +450,11 @@ function cameraCard(mod, d, turret) {
     h("img", { alt: `last captured picture from ${d.id}` }));
   const tools = h("div", { class: "cam__tools" }, live, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
   const objective = h("span", { class: "cam__info" });
-  if (turret) tools.prepend(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
-  el.append(h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id), info, tools),
-    h("div", { class: "cam__view" }, img, last), h("div", { class: "err" }));
+  const view = h("div", { class: "cam__view", title: "click to enlarge / shrink" }, img, last);
+  view.addEventListener("click", (e) => { if (!e.target.closest("a")) el.classList.toggle("is-big"); });
+  const bar = h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id.replace(/_camera/, "").replace(/_/g, " ")), info, tools);
+  if (turret) bar.append(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
+  el.append(bar, view, h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
     $(".dot", el).className = "dot " + (st.connected ? "ok" : "bad");
     if (st.last_image_id) {
@@ -463,7 +464,7 @@ function cameraCard(mod, d, turret) {
     $(".err", el).textContent = st.error || "";
   } };
   if (turret) {
-    m.cards[turret.id] = { el, render: (st) => { objective.textContent = st.objective ? `${st.objective}x` : "objective ?"; } };
+    m.cards[turret.id] = { el, render: (st) => { objective.textContent = st.objective ? `${st.objective}x` : "obj ?"; } };
   }
   return el;
 }
@@ -487,8 +488,8 @@ async function camLoop(id) {
         const old = c.img.src;
         c.img.src = URL.createObjectURL(await r.blob());
         if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-        c.info.textContent = `live ${new Date().toLocaleTimeString()}`;
-        c.info.className = "cam__info";
+        c.info.textContent = "";
+        c.info.className = "cam__info ok";
       } else {
         const body = await r.json().catch(() => ({}));
         c.info.textContent = body.error || `error ${r.status}`;
@@ -500,7 +501,7 @@ async function camLoop(id) {
     }
     await sleep(Math.max(80, 200 - (Date.now() - t0)));
   }
-  c.info.textContent = c.on ? "paused" : "off";
+  c.info.textContent = c.on ? "paused" : "off";  // shown only when not live
   c.info.className = "cam__info";
   c.running = false;
 }
