@@ -99,7 +99,7 @@ def place_item(ctx: ActionContext, arm_id: str) -> None:
 
 
 def rotate(ctx: ActionContext, arm_id: str, deg: float) -> None:
-    """v1 rotate_nose: M888 P6, M2100, M2101 R<int>."""
+    """v1 rotate_nose: M888 P6, M2100, M2101 R<int>: turns the nozzle BY deg (relative), as v1 did."""
     ctx.check()
     arm(ctx, arm_id).rotate_nozzle(float(deg))
 
@@ -110,7 +110,9 @@ def park(ctx: ActionContext, arm_id: str) -> dict:
 
 
 def slot_angle(pt: dict, key: str = "stage_nozzle_deg") -> float | None:
-    """The measured nozzle angle a board slot carries for the work stage (points.yaml header), else None."""
+    """A slot's measured nozzle angle a (points.yaml header): how far to turn the nozzle (relative, M2101 R)
+    after picking from this slot so the object sits square on the work stage; going back turns -a. None = not
+    measured (v1 behaviour)."""
     v = pt.get(key)
     return None if v is None else float(v)
 

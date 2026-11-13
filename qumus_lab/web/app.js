@@ -303,7 +303,7 @@ function motionCard(mod, d) {
     // v1 rotate_nose: M2100 then M2101 R<integer deg> turns the nozzle BY that much from where it is (as in v1;
     // the arm does not report its angle). The box keeps what you typed until the turn was accepted.
     const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle: turn by (deg)`, class: "mono", placeholder: "turn by" });
-    const now = h("div", { class: "axis__now" }, "turns by this much from where it is now");
+    const now = h("div", { class: "axis__now", title: "The nozzle turns BY the typed angle from where it is (v1 M2101 R). Since pick resets when suction turns on: it is the slot angle when you measure one." }, "turns by this much from where it is now");
     const rot = h("button", { type: "button", class: "sm", "data-action": "rotate_nozzle", "data-tip": "turn the nozzle by the typed angle (v1 M2101 R)" }, "Turn");
     const turn = async () => {
       if (!canRun(m, "rotate_nozzle").ok || rot.dataset.busy === "1") return;
@@ -421,8 +421,9 @@ function renderMotion(m, mod, ui, st) {
   setDot(ui.el, st);
   for (const [axis, r] of Object.entries(ui.rows)) {
     if (r.nozzle) {
-      const last = st.nozzle_deg;
-      r.now.textContent = typeof last === "number" ? `turns by this much from where it is now · last turn sent ${last} deg` : "turns by this much from where it is now";
+      // the arm cannot report its angle: the driver counts the turns (since the last pick = a slot's angle)
+      const pick = st.nozzle_since_pick_deg, total = st.nozzle_turned_deg;
+      r.now.textContent = typeof pick === "number" ? `turned since pick ${pick} deg · since connect ${total} deg` : "turns by this much from where it is now";
       continue;
     }
     const cur = st[axisKey(ui.kind, axis)];

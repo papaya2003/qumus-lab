@@ -212,8 +212,6 @@ def place_chip_on_transfer_stage(ctx: ActionContext, p: dict) -> dict:
     _device_point(ctx, STAGE, "load")
     measured = c.slot_angle(pt)
     c.move_point(ctx, ARM, name, z=safe_z)                           # G0 X Y Z30 F5000
-    if measured is not None:  # the slot angle was measured with the chip picked at nozzle 0
-        c.rotate(ctx, ARM, 0.0)
     c.move_point(ctx, ARM, name, z=float(pt["xyz"][2]) + RIGHT_PICK_ABOVE_SLOT_MM)  # G0 Z15 F5000
     c.pick_item(ctx, ARM)
     c.move_point(ctx, ARM, name, z=safe_z)                           # G0 Z30 F5000
@@ -241,14 +239,12 @@ def store_chip(ctx: ActionContext, p: dict) -> dict:
     x, y = float(pt["xyz"][0]), float(pt["xyz"][1])
     spt = ctx.gate.check_point(ARM, "stage_chip")
     measured = c.slot_angle(pt)
-    # measured slot angle: pick on the stage at that angle, put down in the slot at 0 (reverse of placing)
-    angle = 0.0 if measured is not None else c.store_rotation(x + 5, y - 10, float(spt["xyz"][0]), float(spt["xyz"][1]))  # :319-330
+    # v1 turns -angle on the way back; a measured slot angle a was turned +a when placing, so angle = a
+    angle = measured if measured is not None else c.store_rotation(x + 5, y - 10, float(spt["xyz"][0]), float(spt["xyz"][1]))  # :319-330
     _device_point(ctx, STAGE, "load")
     ctx.device(STAGE_VACUUM, ("switch",)).set(False)
     c.park(ctx, ARM)
     c.move_point(ctx, ARM, "stage_chip", z=float(spt["approach_z"]))         # G0 X{sx-10} Y{sy} Z140 F5000
-    if measured is not None:
-        c.rotate(ctx, ARM, measured)
     c.move_point(ctx, ARM, "stage_chip", feed=c.SLOW_F)                      # G0 Z130 F1000
     c.pick_item(ctx, ARM)
     c.park(ctx, ARM)
@@ -260,7 +256,7 @@ def store_chip(ctx: ActionContext, p: dict) -> dict:
     c.move_point(ctx, ARM, name, z=safe_z)
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, STATION, place, sample_id=p.get("sample_id"))
-    return {"chip": sid, "from": STATION, "to": place, "nozzle_deg": round(-angle, 3)}
+    return {"chip": sid, "from": STATION, "to": place, "nozzle_turn_deg": round(-angle, 3)}
 
 
 # ------------------------------------------------------------------------------------------- stamp
@@ -275,8 +271,6 @@ def load_stamp(ctx: ActionContext, p: dict) -> dict:
     ctx.device(STAMP_VACUUM, ("switch",)).set(True)
     measured = c.slot_angle(pt, "holder_nozzle_deg")
     c.move_point(ctx, ARM, name, z=float(pt.get("approach_z", 150)))         # G0 X254 Y190 Z150 F5000
-    if measured is not None:  # the holder angle was measured with the stamp picked at nozzle 0
-        c.rotate(ctx, ARM, 0.0)
     c.move_point(ctx, ARM, name)                                             # G0 Z16 F5000
     c.pick_item(ctx, ARM)
     c.move_point(ctx, ARM, name, z=float(pt.get("approach_z", 150)))         # G0 Z150 F5000

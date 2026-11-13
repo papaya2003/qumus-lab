@@ -129,7 +129,7 @@ class ArmEmulator(LineEmulator):
             self.vacuum = False
             self.ok()
         elif cmd == "M2101":
-            self.nozzle_deg = args.get("R", 0.0)
+            self.nozzle_deg += args.get("R", 0.0)  # relative, like the real rotary module (v1 "Rotated nose by")
             self.ok()
         elif cmd in ("M410", "M112"):
             self.motion.halt()

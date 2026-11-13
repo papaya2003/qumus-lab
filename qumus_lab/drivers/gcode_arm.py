@@ -29,7 +29,8 @@ NO_OK_PREFIXES = ("M888",)  # v1 robot_arm_controller.py:15
 
 class GcodeArm(Device):
     kind = "arm"
-    fields = {"x_mm": "mm", "y_mm": "mm", "z_mm": "mm", "nozzle_deg": "deg", "vacuum_on": "bool",
+    fields = {"x_mm": "mm", "y_mm": "mm", "z_mm": "mm", "nozzle_turned_deg": "deg", "nozzle_since_pick_deg": "deg",
+              "vacuum_on": "bool",
               "pose_trusted": "bool", "moving": "bool"}
 
     def __init__(self, device_id: str, cfg: dict, serial_factory):
@@ -41,7 +42,10 @@ class GcodeArm(Device):
         self.open_settle_s = float(cfg.get("open_settle_s", 2.0))
         self.stop_gcode: list[str] = list(cfg.get("stop_gcode") or [])
         self.pose: dict[str, float | None] = {"x": None, "y": None, "z": None}
-        self.nozzle_deg: float | None = None
+        # The nozzle turns BY an angle (v1 M2101 R is relative) and cannot be read back, so the driver only counts:
+        # degrees turned since connecting, and since the last pick (suction on) - the slot angle being measured.
+        self.nozzle_turned_deg = 0.0
+        self.nozzle_since_pick_deg = 0.0
         self.vacuum_on: bool | None = None
         self.pose_trusted = False
         self.boot_banner = ""
@@ -61,6 +65,7 @@ class GcodeArm(Device):
             self.ser.reset_input_buffer()
             self.connected = True
             self._modes_sent = False
+            self.nozzle_turned_deg = self.nozzle_since_pick_deg = 0.0
             self.read()
             # A reset board reports X0 Y0 Z0 or prints a banner: its position is not trustworthy.
             p = self.pose
@@ -137,7 +142,8 @@ class GcodeArm(Device):
 
     def snapshot(self) -> dict:
         return {"x_mm": self.pose["x"], "y_mm": self.pose["y"], "z_mm": self.pose["z"],
-                "nozzle_deg": self.nozzle_deg, "vacuum_on": self.vacuum_on, "pose_trusted": self.pose_trusted,
+                "nozzle_turned_deg": self.nozzle_turned_deg, "nozzle_since_pick_deg": self.nozzle_since_pick_deg,
+                "vacuum_on": self.vacuum_on, "pose_trusted": self.pose_trusted,
                 "moving": self.moving}
 
     # --- generic operations ---------------------------------------------
@@ -194,6 +200,8 @@ class GcodeArm(Device):
         """Nozzle suction. v1 vacuum_on: M888 P2, M1000. vacuum_off: M888 P2, M1003."""
         self.send("M888 P2")
         self.send("M1000" if on else "M1003")
+        if on and not self.vacuum_on:
+            self.nozzle_since_pick_deg = 0.0  # a new pick: count the turns from here
         self.vacuum_on = bool(on)
 
     def release_item(self) -> None:
@@ -207,11 +215,12 @@ class GcodeArm(Device):
         self.finish_moves(expected_s=1.0)
 
     def rotate_nozzle(self, deg: float) -> None:
-        """v1 rotate_nose: M888 P6, M2100, M2101 R<int deg>."""
+        """v1 rotate_nose: M888 P6, M2100, M2101 R<int deg>. Turns the nozzle BY deg from where it is (relative)."""
         self.send("M888 P6")
         self.send("M2100")
         self.send(f"M2101 R{int(deg)}")
-        self.nozzle_deg = float(int(deg))
+        self.nozzle_turned_deg += int(deg)
+        self.nozzle_since_pick_deg += int(deg)
 
     def stop(self) -> bool | None:
         if not self.connected:

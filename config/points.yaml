@@ -17,11 +17,14 @@
 # v1 used slightly different numbers for its place and pick moves; the point keeps v1's place x/y and its
 # (lower) pick z, and the comment gives the other v1 value.
 #
-# Nozzle angle per slot (operator decision 2026-11-13): a board slot may carry
-#   stage_nozzle_deg  - chip / carrier slots: the nozzle angle on the work stage that sets an object, picked
-#                       square from this slot with the nozzle at 0, square on the stage;
+# Nozzle angle per slot (operator decisions 2026-11-13). The nozzle turns BY an angle (v1 M2101 R is relative;
+# the arm cannot report where it points), so a slot angle is a turn, not a position. A board slot may carry
+#   stage_nozzle_deg  - chip / carrier slots: degrees to turn after picking from this slot so the object sits
+#                       square on the work stage (going back to the slot turns the same amount the other way);
 #   holder_nozzle_deg - stamp slots: the same for the stamp holder.
-# Measured at L3 (docs/l3-measurements.csv). Without it the ops keep v1's angles (0 / store_rotation / 50).
+# Measured at L3 (docs/l3-measurements.csv): pick from the slot, hold above the stage, turn in small steps on the
+# debug page until square; the page's "turned since pick" is the value. Without it the ops keep v1's angles
+# (0 / store_rotation / 50).
 
 version: 1
 
