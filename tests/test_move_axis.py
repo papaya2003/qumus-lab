@@ -39,7 +39,6 @@ def test_move_axis_reaches_target(stack, module, device, axis, target, key):
 
 
 @pytest.mark.parametrize("module,device,axis,target,why", [
-    ("exfoliation", "arm_left", "x", 10.5, "above the cap 10"),
     ("exfoliation", "arm_left", "z", 94.0, "min_z_mm"),        # arm down 1 mm, min_z unknown: jog cap 0.5
     ("stacking", "stamp", "z", 6.3, "stamp z"),               # stamp z 0.2 mm: jog cap 0.1
     ("stacking", "stamp", "y", 8.5, "above the cap 1"),
@@ -84,10 +83,29 @@ def test_measured_min_z_allows_longer_arm_moves_down_but_not_below_it(cfg):
 
 def test_gate_target_caps_apply_in_real_mode_too(cfg):
     gate = SafetyGate(cfg, "stacking", demo=False)
-    assert gate.check_target_move("stage", "sample_stage", "x", 0.0, 10.0) == 10.0
+    assert gate.check_target_move("manipulator", "stamp", "x", 0.0, 1.0) == 1.0
     with pytest.raises(Rejected):
-        gate.check_target_move("stage", "sample_stage", "x", 0.0, 10.01)
+        gate.check_target_move("manipulator", "stamp", "x", 0.0, 1.01)
+    with pytest.raises(Rejected):
+        gate.check_target_move("focus", "focus", "z", 0.0, 501.0)
+    with pytest.raises(Rejected, match="min_z"):                      # arm z down keeps the jog cap
+        gate.check_target_move("arm", "arm_right", "z", 140.0, 139.0)
+    assert gate.check_target_move("stage", "sample_stage", "x", 0.0, 25.0) == float("inf")  # null = no cap
     with pytest.raises(Rejected):
         gate.check_target_move("arm", "arm_right", "z", 140.0, float("nan"))
     with pytest.raises(Rejected):
         gate.check_target_move("turret", "turret", "x", 0.0, 1.0)
+
+
+def test_arm_and_stage_have_no_distance_cap_but_ranges_still_apply(stack):
+    """Operator request 2026-11-13: the 10 mm cap made typed moves too slow (limits.yaml caps set to null)."""
+    lc = _move(stack.services["exfoliation"], "arm_left", "x", 30.0)        # 30 mm in one typed move
+    assert lc["result"] == "ok", lc
+    assert abs(lc["output"]["x_mm"] - 30.0) < 1e-6
+    lc = _move(stack.services["exfoliation"], "arm_left", "z", 120.0)       # arm z up: no cap either
+    assert lc["result"] == "ok", lc
+    svc = stack.services["stacking"]
+    before = svc.module.devices["sample_stage"].snapshot()
+    lc = _move(svc, "sample_stage", "rail", 130.0)                          # past the 0..120 mm rail
+    assert lc["result"] == "rejected" and "outside" in lc["message"], lc
+    assert svc.module.devices["sample_stage"].snapshot() == before
