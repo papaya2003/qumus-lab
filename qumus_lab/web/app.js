@@ -73,10 +73,84 @@ function canRun(m, action) {
   return { ok: true };
 }
 
+/* Plain words for a command, shown on the card that sent it and in the status bar. */
+const ARM_NAMES = { arm_left: "left arm", arm_right: "right arm" };
+const onOff = (v) => (v ? "on" : "off");
+function cmdText(action, p = {}) {
+  switch (action) {
+    case "move_axis": return `move ${p.axis} to ${p.target}`;
+    case "jog": return `${p.axis} ${p.mm > 0 ? "+" : ""}${p.mm}`;
+    case "go_to_point": return `go to ${String(p.point || "").split(".").pop()}`;
+    case "rotate_nozzle": return `turn nozzle ${p.deg > 0 ? "+" : ""}${p.deg}°`;
+    case "arm_suction": return `suction ${onOff(p.on)}`;
+    case "set_switch": return `switch ${onOff(p.on)}`;
+    case "gantry_power": return `motors ${onOff(p.on)}`;
+    case "heat": return `heat to ${p.target_c} °C for ${p.timeout_s} s`;
+    case "heat_off": return "heat off";
+    case "advance_tape": return `feed tape ${p.deg}°`;
+    case "set_objective": return `objective ${p.objective}x`;
+    case "known_state": return "switches set to a safe state";
+    case "read_all": return "read all";
+    case "zone_acquire": return `middle board reserved for ${ARM_NAMES[p.device] || p.device}`;
+    case "zone_release": return "middle board released";
+    case "zone_clear": return "middle board cleared";
+    default: return action.replace(/_/g, " ");
+  }
+}
+
+// a command's name without its parameters (events "done" lines, status bar for other clients' commands)
+const ACTION_NAMES = { move_axis: "move", go_to_point: "go to point", rotate_nozzle: "nozzle turn", arm_suction: "suction",
+  set_switch: "switch", gantry_power: "motors", heat: "heat", advance_tape: "tape feed", set_objective: "objective change",
+  known_state: "switches set to a safe state" };
+const actName = (a) => ACTION_NAMES[a] || String(a || "command").replace(/_/g, " ");
+
+// which card a command belongs to (null = module-wide)
+function cmdDevice(m, action, p) {
+  if (p.device) return p.device;
+  if (p.point) return String(p.point).split(".")[0];
+  if (p.camera) return p.camera;
+  const byKind = { gantry_power: "gantry", apply_tape: "gantry", peel_tape: "gantry", advance_tape: "tape_reels", set_objective: "turret" }[action];
+  const dev = byKind && m.describe.devices.find((x) => x.kind === byKind);
+  return dev ? dev.id : null;
+}
+
+function cardNote(m, dev, text, cls) {
+  const c = dev && m.cards[dev];
+  if (!c) return;
+  let line = $(`.card__last[data-dev="${dev}"]`, c.el);
+  if (!line) {
+    line = h("div", { class: "card__last", "data-dev": dev });
+    const err = c.el.querySelector(":scope > .err");
+    if (err) err.before(line); else c.el.append(line);
+  }
+  line.className = `card__last ${cls}`;
+  line.textContent = text;
+}
+
 async function send(mod, action, params = {}) {
+  const m = modules[mod];
+  const text = cmdText(action, params);
+  const dev = cmdDevice(m, action, params);
   const r = await api(mod, "POST", "/api/command", { action, ...params });
-  if (r.status !== 202) flash(mod, `${action} refused (${r.status}): ${r.data && r.data.error}`, "failed");
+  if (r.status !== 202) {
+    flash(mod, `${text}: refused, ${r.data && r.data.error}`, "failed");
+    cardNote(m, dev, `${text}: refused, ${r.data && r.data.error}`, "failed");
+  } else {
+    m.sent = m.sent || {};
+    m.sent[r.data.command_id] = { text, dev };
+    cardNote(m, dev, `${text} …`, "busy");
+  }
   return r;
+}
+
+/* When a command this page sent has finished: its result goes on its card. */
+function noteFinished(m) {
+  const lc = m.state && m.state.last_command;
+  const s = lc && m.sent && m.sent[lc.id];
+  if (!s || !lc.finished_at) return;
+  delete m.sent[lc.id];
+  m.lastSent = { id: lc.id, text: s.text };
+  cardNote(m, s.dev, `${s.text}: ${lc.result === "ok" ? "done" : lc.result}${lc.message && lc.result !== "ok" ? `, ${lc.message}` : ""}`, lc.result);
 }
 
 function flash(mod, text, cls) {
@@ -126,7 +200,7 @@ const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
 const UNITS = {
   exfoliation: [[["Arm", ["arm_left"]]], [["Tape", ["tape_gantry", "tape_reels"]]],
                 [["Exfoliation stage", ["exfoliation_heater", "exfoliation_vacuum", "exfoliation_fan"]]]],
-  stacking: [[["Arm", ["arm_right"]]], [["Sample stage", ["sample_stage", "stage_vacuum", "transfer_heater"]]],
+  stacking: [[["Arm", ["arm_right"]], ["Transfer heater", ["transfer_heater"]]], [["Sample stage", ["sample_stage", "stage_vacuum"]]],
              [["Stamp", ["stamp", "stamp_vacuum"]], ["Microscope", ["focus", "turret"]]]],
 };
 // Short names inside a block (the device id stays beside it, small, because the L3 sheet and points.yaml use it).
@@ -238,6 +312,7 @@ function refreshGuards(m) {
   for (const b of m.el.querySelectorAll("button[data-action]")) {
     if (b.classList.contains("holding")) continue;
     if (b.dataset.busy === "1") { b.disabled = true; continue; }
+    if (b.needs && !b.needs()) { b.disabled = true; b.title = b.needsWhy || ""; continue; }
     const g = canRun(m, b.dataset.action);
     b.disabled = !g.ok;
     b.title = g.ok ? (b.dataset.tip || "") : g.why;
@@ -248,8 +323,9 @@ function refreshGuards(m) {
 function card(mod, d, extraClass = "") {
   const el = h("article", { class: `card ${extraClass}`, id: `dev-${mod}-${d.id}` });
   const label = LABELS[d.id];
-  const head = h("div", { class: "card__head" }, h("span", { class: "dot" }), h("span", { class: "card__name" }, label || d.id),
-    h("span", { class: "card__id", title: d.kind + (d.source ? ` · values from ${d.source}` : "") }, label ? d.id : d.kind));
+  // the device id (used in points.yaml and the L3 sheet) is in the name's tooltip
+  const head = h("div", { class: "card__head" }, h("span", { class: "dot" }),
+    h("span", { class: "card__name", title: `${d.id} · ${d.kind}${d.source ? ` · values from ${d.source}` : ""}` }, label || d.id));
   if (modules[mod].describe.commands.read) {
     head.append(h("button", { type: "button", class: "icon", "data-action": "read", "data-tip": `read ${d.id} again`, "aria-label": `read ${d.id} again`,
       onclick: () => send(mod, "read", { device: d.id }) }, "↻"));
@@ -268,11 +344,12 @@ function motionCard(mod, d) {
   const step = h("select", { "aria-label": `${d.id} step` }, steps.map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
   const help = "Type a value and press Enter (or Move) to go there; Esc puts the live value back. − / + steps once, hold to keep stepping."
     + (d.kind === "arm" ? " Several edited axes move one after another: z up first, z down last." : " Several edited axes move one after another, top to bottom.");
-  const head = h("div", { class: "pos__head" }, h("span", { class: "muted small hint", title: help }, `Position (${unit}) `, h("span", { class: "hint__i", "aria-hidden": "true" }, "?")));
+  const estimated = h("span", { class: "pos__est", title: "counted from where it was at start-up, not read back from the motor", hidden: "" }, "estimated");
+  const head = h("div", { class: "pos__head" }, h("span", {}, h("span", { class: "muted small hint", title: help }, `Position (${unit}) `, h("span", { class: "hint__i", "aria-hidden": "true" }, "?")), estimated));
   if (m.describe.commands.jog) head.append(h("label", {}, "step ", step));
   el.append(head);
   const rows = {};
-  const ui = { el, rows, kind: d.kind, id: d.id };
+  const ui = { el, rows, kind: d.kind, id: d.id, estimated };
   for (const axis of axes) {
     // a text box (not type=number) so the live value can be refreshed without losing a select-all; arrow keys
     // change the typed value by the chosen step (nothing moves until Enter)
@@ -331,18 +408,25 @@ function motionCard(mod, d) {
     go.addEventListener("click", () => moveEdited(mod, ui));
     const reset = h("button", { type: "button", class: "sm", onclick: () => resetEdits(m, mod, ui) }, "Reset");
     ui.go = go;
-    el.append(h("div", { class: "pos__go" }, go, reset));
+    ui.goRow = h("div", { class: "pos__go", hidden: "" }, go, reset);  // shown once a box is edited
+    el.append(ui.goRow);
   }
   const facts = h("div", { class: "facts" });
   el.append(facts);
   ui.facts = facts;
   if (d.points && d.points.length && m.describe.commands.go_to_point) {
-    const sel = h("select", { "aria-label": `${d.id} point` }, d.points.map((p) => h("option", { value: `${d.id}.${p}` }, p)));
+    // starts on "choose a point": Go does nothing until a point is picked (no move by habit)
+    const sel = h("select", { "aria-label": `${d.id} point` }, h("option", { value: "", selected: "", disabled: "" }, "choose a point…"),
+      d.points.map((p) => h("option", { value: `${d.id}.${p}` }, p)));
+    sel.addEventListener("change", () => refreshGuards(m));
     const go = guarded(mod, "go_to_point", "Go", () => {
       const p = sel.value;
+      if (!p) return null;
       if (!devMode && !confirm(`Move to ${p}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
       return { point: p };
     }, "sm");
+    go.needs = () => sel.value !== "";
+    go.needsWhy = "choose a point first";
     el.append(h("div", { class: "goto" }, h("span", { class: "muted small" }, "Go to point"), sel, go));
   }
   const act = h("div", { class: "actions" });
@@ -444,6 +528,8 @@ function renderMotion(m, mod, ui, st) {
     }
   }
   if (ui.toggle) ui.toggle.b.set(st[ui.toggle.key]);
+  if (ui.goRow) ui.goRow.hidden = !ui.moving && !Object.values(ui.rows).some((r) => !r.nozzle && r.inp.classList.contains("dirty"));
+  ui.estimated.hidden = st.position_estimated !== true;
   setKids(ui.facts, (FACTS[ui.kind] || []).filter(([k]) => k in st).map(([k, label, unit]) =>
     h("span", {}, `${label} `, h("b", {}, fmt(st[k]) + (unit ? ` ${unit}` : "")))));
   $(".err", ui.el).textContent = st.error || "";
@@ -458,7 +544,8 @@ function heaterCard(mod, d) {
   // heater's max_c and timeouts above its max. Empty volts = the heater's own boost/hold voltages.
   const t = devMode ? numInput(30, 1, 175, 1, "target C") : numInput(30, 1, 40, 1, "target C");
   const to = devMode ? numInput(300, 10, 7200, 10, "timeout s") : numInput(300, 10, 600, 10, "timeout s");
-  const v = devMode ? numInput("", 0.5, 30, 0.5, "volts (empty = heater's own boost/hold)") : numInput(6.5, 0.5, 6.5, 0.5, "volts");
+  const v = devMode ? numInput("", 0.5, 30, 0.5, "volts (empty = auto: the heater's own boost/hold)") : numInput(6.5, 0.5, 6.5, 0.5, "volts");
+  if (devMode) v.placeholder = "auto";
   el.append(temp, facts,
     h("div", { class: "actions" }, h("label", {}, "target ", t, " C"), h("label", {}, "for ", to, " s"), h("label", {}, "at ", v, " V")),
     h("div", { class: "actions" },
@@ -472,10 +559,13 @@ function heaterCard(mod, d) {
   m.cards[d.id] = { el, render: (st) => {
     setDot(el, st, st.phase && st.phase !== "off");
     setKids(temp, [fmt(st.temp_c, 1), h("small", {}, "°C")]);
-    const f = [["target", st.target_c, "C"], ["set", st.set_v, "V"], ["phase", st.phase, ""]];
-    if (st.deadline_unix && st.phase !== "off") f.push(["off in", Math.max(0, Math.round(st.deadline_unix - Date.now() / 1000)), "s"]);
-    if (st.last_off_reason) f.push(["last off", st.last_off_reason, ""]);
-    setKids(facts, f.map(([k, val, u]) => h("span", {}, `${k} `, h("b", {}, fmt(val, 1) + (u ? ` ${u}` : "")))));
+    // off: just "off" (and why it last went off); heating: target, voltage, phase, time left
+    const heating = st.phase && st.phase !== "off";
+    const f = heating ? [["target", st.target_c, "C"], ["set", st.set_v, "V"], ["phase", st.phase, ""]] : [["", "off", ""]];
+    if (heating && st.deadline_unix) f.push(["off in", Math.max(0, Math.round(st.deadline_unix - Date.now() / 1000)), "s"]);
+    if (!heating && st.last_off_reason) f.push(["last off", st.last_off_reason, ""]);
+    for (let i = f.length - 1; i >= 0; i--) if (f[i][1] === null || f[i][1] === undefined) f.splice(i, 1);
+    setKids(facts, f.map(([k, val, u]) => h("span", {}, k ? `${k} ` : "", h("b", {}, fmt(val, 1) + (u ? ` ${u}` : "")))));
     $(".err", el).textContent = st.error || "";
   } };
   return el;
@@ -520,7 +610,7 @@ function genericCard(mod, d) {
   el.append(h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
     setDot(el, st);
-    const keys = Object.keys(st).filter((k) => !["kind", "connected", "error"].includes(k));
+    const keys = Object.keys(st).filter((k) => !["kind", "connected", "error"].includes(k) && st[k] !== null && st[k] !== undefined);
     setKids(facts, keys.map((k) => h("span", {}, `${k.replace(/_/g, " ")} `, h("b", {}, fmt(st[k])))));
     $(".err", el).textContent = st.error || "";
   } };
@@ -544,7 +634,7 @@ function cameraCard(mod, d, turret) {
   const live = h("button", { type: "button", "aria-pressed": "false", title: "live picture on / off" }, "Live");
   let saved = null;
   try { saved = localStorage.getItem(`qumus-camlive-${d.id}`); } catch { saved = null; }
-  const c = { mod, img, info, on: saved !== "off", running: false, live };
+  const c = { mod, img, info, on: saved !== "off", running: false, live, view: null, sized: false };
   camLoops[d.id] = c;
   const sync = () => { live.classList.toggle("is-on", c.on); live.setAttribute("aria-pressed", String(c.on)); };
   live.addEventListener("click", () => {
@@ -559,6 +649,7 @@ function cameraCard(mod, d, turret) {
   const tools = h("div", { class: "cam__tools" }, live, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
   const objective = h("span", { class: "cam__info" });
   const view = h("div", { class: "cam__view" }, img, last);
+  c.view = view;
   const bar = h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id.replace(/_camera/, "").replace(/_/g, " ")), info, tools);
   // objectives sit on the picture (top left), so the microscope tile is exactly as big as the others
   if (turret) view.append(h("div", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
@@ -600,6 +691,9 @@ async function camLoop(id) {
       const r = await fetch(`/cam/${id}?t=${t0}`, { cache: "no-store" });
       if (r.ok) {
         const old = c.img.src;
+        if (!c.sized) c.img.onload = () => {  // the frame takes the camera's own shape (no black bars)
+          if (c.img.naturalWidth && !c.sized) { c.view.style.aspectRatio = `${c.img.naturalWidth} / ${c.img.naturalHeight}`; c.sized = true; }
+        };
         c.img.src = URL.createObjectURL(await r.blob());
         if (old.startsWith("blob:")) URL.revokeObjectURL(old);
         c.info.textContent = "";
@@ -631,28 +725,33 @@ function renderStatus(m) {
     : h("span", { class: "pill" }, h("span", { class: "dot " + (st.busy ? "busy" : "ok") }), st.busy ? `Busy: ${st.busy_action}` : "Ready"));
   if (st.locked && st.fault) parts.push(h("span", {}, `${st.fault.code}: ${st.fault.message}`));
   if (st.locked) parts.push(h("button", { type: "button", class: "primary sm", onclick: () => unlock(m.name) }, "Unlock"));
-  const lease = st.lease ? (st.lease.holder === CLIENT ? "you have control" : `controlled by ${st.lease.holder}`) : "nobody has control";
-  parts.push(h("span", { class: "muted small" }, lease));
+  if (!st.lease) parts.push(h("span", { class: "muted small" }, "Take control (top right) to operate"));
+  else if (st.lease.holder !== CLIENT) parts.push(h("span", { class: "muted small" }, `controlled by ${st.lease.holder}: reading only`));
   for (const [zone, z] of Object.entries(st.zones || {})) parts.push(...zoneParts(m, zone, z));
   const lc = st.last_command;
   const flashNewer = m.flash && m.flash.until > Date.now() && !(lc && lc.finished_at * 1000 > m.flash.at);
   if (flashNewer) parts.push(h("span", { class: "last " + m.flash.cls }, m.flash.text));
-  else if (lc) parts.push(h("span", { class: "last " + lc.result }, `${lc.action}: ${lc.result}${lc.message ? ", " + lc.message : ""}`));
+  else if (lc) {
+    const s = (m.sent && m.sent[lc.id]) || (m.lastSent && m.lastSent.id === lc.id ? m.lastSent : null);
+    const text = s ? s.text : actName(lc.action);
+    parts.push(h("span", { class: "last " + lc.result }, `${text}: ${lc.result === "ok" ? "done" : lc.result}${lc.message && lc.result !== "ok" ? ", " + lc.message : ""}`));
+  }
   setKids(box, parts);
 }
 
 /* Middle board occupancy lock: shared by both modules (one arm at a time). */
 function zoneParts(m, zone, z) {
   const label = zone.replace(/_/g, " ");
+  const who = (a) => ARM_NAMES[a] || a;
   const c = m.describe.commands.zone_acquire;
   const arms = c ? c.params.properties.device.enum : [];
   const out = [h("span", { class: "zone" + (z.holder ? " held" : "") }, h("span", { class: "dot " + (z.holder ? "busy" : "ok") }),
-    z.holder ? `${label}: held by ${z.holder}${z.inside.length ? " (inside)" : ""}` : `${label}: free`)];
+    z.holder ? `${label}: reserved for ${who(z.holder)}${z.inside.length ? " (arm inside)" : ""}` : `${label}: free`)];
   const ctl = canRun(m, "zone_acquire");
   for (const arm of arms) {
     if (!z.holder) {
       out.push(h("button", { type: "button", class: "sm", disabled: ctl.ok ? undefined : "", title: ctl.ok ? "" : ctl.why,
-        onclick: () => send(m.name, "zone_acquire", { zone, device: arm }) }, `Take for ${arm}`));
+        onclick: () => send(m.name, "zone_acquire", { zone, device: arm }) }, `Reserve for ${who(arm)}`));
     } else if (z.holder === arm) {
       out.push(h("button", { type: "button", class: "sm", disabled: ctl.ok && !z.inside.length ? undefined : "",
         title: z.inside.length ? "move the arm out first" : (ctl.ok ? "" : ctl.why),
@@ -662,7 +761,7 @@ function zoneParts(m, zone, z) {
   if (z.holder) {
     out.push(h("button", { type: "button", class: "sm", onclick: () => {
       if (confirm(`Clear ${label}? Only after you checked by eye that no arm is in it.`)) send(m.name, "zone_clear", { zone });
-    } }, "Clear"));
+    } }, "Clear reservation"));
   }
   return out;
 }
@@ -681,6 +780,7 @@ async function pollState() {
       m.state = r.status === 200 ? r.data : null;
     } catch { m.state = null; }
     if (m.state) for (const [id, st] of Object.entries(m.state.devices)) if (m.cards[id]) m.cards[id].render(st);
+    noteFinished(m);
     renderStatus(m);
     renderTab(m);
     refreshGuards(m);
@@ -719,11 +819,25 @@ function renderEvents() {
   events.sort((a, b) => b.ts_unix - a.ts_unix);
   if (events.length > 400) events.length = 400;
   const onlyWarn = $("#evwarn").checked;
-  $("#events").replaceChildren(...events.filter((e) => !onlyWarn || e.level !== "info").slice(0, 200).map((e) => {
-    const t = new Date(e.ts_unix * 1000).toLocaleTimeString();
-    const f = Object.keys(e.fields || {}).length ? JSON.stringify(e.fields) : "";
-    return h("li", { class: e.level }, h("span", {}, t), h("span", { class: "src" }, e.module), h("span", {}, e.message, " ", h("span", { class: "f" }, f)));
-  }));
+  $("#events").replaceChildren(...events.filter((e) => (!onlyWarn || e.level !== "info") && e.message !== "command started")
+    .slice(0, 200).map((e) => {
+      const t = new Date(e.ts_unix * 1000).toLocaleTimeString();
+      const raw = Object.keys(e.fields || {}).length ? JSON.stringify(e.fields) : "";
+      return h("li", { class: e.level, title: raw }, h("span", {}, t), h("span", { class: "src" }, e.module), h("span", {}, eventText(e)));
+    }));
+}
+
+/* One readable line per event; the raw fields stay in the line's tooltip. */
+function eventText(e) {
+  const f = e.fields || {};
+  const who = f.client ? (f.client === CLIENT ? " (this page)" : ` (${f.client})`) : "";
+  if (e.message === "command accepted") return `${cmdText(f.action, f.params || {})}${f.params && f.params.device ? ` · ${f.params.device}` : ""}${who}`;
+  if (e.message === "command done") return `${actName(f.action)}: done`;
+  if (e.message.startsWith("command ")) return `${actName(f.action)}: ${e.message.slice(8)}${f.message ? `, ${f.message}` : ""}`;
+  if (e.message === "service started") return `service started${f.demo ? " (demo)" : ""}`;
+  if (e.message.startsWith("lease ")) return `control ${e.message.slice(6)}${f.holder ? ` by ${f.holder === CLIENT ? "this page" : f.holder}` : ""}`;
+  const rest = Object.entries(f).filter(([, v]) => v !== null && typeof v !== "object").map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`);
+  return rest.length ? `${e.message} · ${rest.join(" · ")}` : e.message;
 }
 
 async function stopAll() {
@@ -829,6 +943,7 @@ async function boot() {
   const mode = $("#mode");
   mode.textContent = anyDemo ? "Demo · simulated" : "Real instruments";
   mode.className = "badge " + (anyDemo ? "demo" : "real");
+  document.body.classList.toggle("is-real", !anyDemo);  // a red line across the top of the page in real mode
   const take = $("#take");
   take.addEventListener("click", async () => {
     control = !control;
@@ -844,6 +959,13 @@ async function boot() {
   });
   $("#evwarn").addEventListener("change", renderEvents);
   $("#stopall").addEventListener("click", stopAll);
+  // Esc twice within a second = STOP ALL (a single Esc still just undoes a typed value)
+  let lastEsc = 0;
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.repeat) return;
+    const now = Date.now();
+    if (now - lastEsc < 1000) { lastEsc = 0; stopAll(); } else lastEsc = now;
+  });
   window.addEventListener("beforeunload", () => {
     if (control) for (const name of Object.keys(modules)) navigator.sendBeacon && fetch(`/m/${name}/api/release`, { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Qumus-Client": CLIENT }, body: "{}" });
   });
