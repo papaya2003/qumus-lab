@@ -70,7 +70,7 @@ zones:
 The debug page shows the zone in each module's status line with Take, Release and Clear.
 
 Limit: `jog` and `move_axis` do not know zone geometry (no measured outline yet). Both are local only; jogs are
-capped at 0.5 mm, typed targets at 10 mm from where the arm is (arm z down 0.5 mm until `min_z_mm` is measured).
+capped at 0.5 mm, typed targets have no distance cap since 2026-11-13 (arm z down 0.5 mm until `min_z_mm` is measured).
 
 ## Not done yet
 

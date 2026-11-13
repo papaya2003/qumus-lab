@@ -288,7 +288,7 @@ function refreshGuards(m) {
   }
 }
 
-/* Typed target for one axis. The gate allows at most 10 mm from where the axis is (stamp x/y 1 mm, focus
+/* Typed target for one axis. Arm, stage, gantry and stamp rail have no distance cap (stamp x/y 1 mm, focus
    500 um); stamp z and arm z down keep the jog cap. The service reads the position again before it moves. */
 function moveTo(mod, d, axes) {
   const unit = axisUnit(d.kind);
@@ -304,7 +304,7 @@ function moveTo(mod, d, axes) {
     if (!confirm(`Move ${d.id} ${axis.value} from ${fmt(cur)} to ${t} ${unit}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
     return { device: d.id, axis: axis.value, target: t };
   });
-  go.dataset.tip = `Move one axis to the typed position (at most ${d.kind === "focus" ? "500 um" : d.kind === "manipulator" ? "1 mm, z 0.1 mm" : "10 mm"} away)`;
+  go.dataset.tip = `Move one axis to the typed position${d.kind === "focus" ? " (at most 500 um away)" : d.kind === "manipulator" ? " (stamp x/y at most 1 mm, z 0.1 mm away)" : " (no distance cap; arm z down 0.5 mm until min_z is measured)"}`;
   return h("span", { class: "moveto" }, h("span", { class: "muted" }, "move "), axis, h("span", { class: "muted" }, " to "), target,
     h("span", { class: "muted" }, ` ${unit} `), go, now);
 }

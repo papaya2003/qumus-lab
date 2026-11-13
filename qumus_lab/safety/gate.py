@@ -8,8 +8,9 @@ Rules (contract v1 + brief B):
 - local_only actions (jog, move_axis, raw switch) only from loopback; caps: arm/stage/gantry 0.5 mm, stamp
   0.1 mm, focus 50 um, switches auto-off <= 10 s, first heat <= 40 C.
 - move_axis (type a target on the debug page): one axis, at most `*_target_max_*` away from the position just
-  read (arm/stage/gantry/stamp rail 10 mm, stamp x/y 1 mm, focus 500 um). Stamp z and arm z *down* keep the jog cap
-  while the arm's min_z is not in limits.yaml: a crash there cannot be stopped in software.
+  read (stamp x/y 1 mm, focus 500 um; a cap set to null in limits.yaml means no distance cap, which is how arm,
+  stage, gantry and stamp rail are configured since 2026-11-13). Axis ranges still apply. Stamp z and arm z *down*
+  keep the jog cap while the arm's min_z is not in limits.yaml: a crash there cannot be stopped in software.
 - real mode: go_to_point needs a `source: measured` point (v1 numbers are starting guesses only);
   heating a heater whose limits are not measured is capped like the first heat.
 - feeds never above the arm's max feed; axis targets inside their ranges.
@@ -99,6 +100,15 @@ class SafetyGate:
             raise Rejected(f"jog {amount} {unit} is above the cap {cap} {unit} for {device}")
         return cap
 
+    def _target_cap(self, key: str, default: float) -> float:
+        """A move_axis distance cap from limits.yaml; null there means no distance cap (math.inf)."""
+        if key in self.probe and self.probe[key] is None:
+            return math.inf
+        cap = float(self.probe.get(key, default))
+        if not math.isfinite(cap) or cap <= 0:
+            raise Rejected(f"invalid move_axis cap {key}: {cap}")
+        return cap
+
     def check_target_move(self, kind: str, device: str, axis: str, current: float, target: float) -> float:
         """move_axis: distance from the position just read must be within the per-kind cap. Returns the cap."""
         if not (math.isfinite(current) and math.isfinite(target)):
@@ -114,10 +124,10 @@ class SafetyGate:
         if kind not in caps:
             raise Rejected(f"{device} ({kind}) cannot be moved to a typed target")
         key, default = caps[kind]
-        cap = float(self.probe.get(key, default))
+        cap = self._target_cap(key, default)
         why = ""
         if kind == "manipulator" and axis == "rail":
-            cap = float(self.probe.get("stamp_rail_target_max_mm", 10.0))
+            cap = self._target_cap("stamp_rail_target_max_mm", 10.0)
         elif kind == "manipulator" and axis == "z":
             cap, why = min(cap, float(self.probe.get("stamp_jog_max_mm", 0.1))), " (stamp z: jog cap, to protect the stamp)"
         elif kind == "arm" and axis == "z" and dist < 0:

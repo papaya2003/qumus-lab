@@ -122,7 +122,7 @@ Both modules:
 | `capture` | `camera` | A | one picture, returns `image_id` |
 | `go_to_point` | `point` (`<device>.<name>` from points.yaml) | M | move to a named point; real mode needs `source: measured` |
 | `jog` | `device, axis, mm` | M L | small relative move, capped (arm/stage/gantry 0.5 mm, stamp 0.1 mm, focus 0.05 mm) |
-| `move_axis` | `device, axis, target` | M L | [Q] one axis to a typed position (mm; focus um), at most 10 mm from the position just read (stamp x/y 1 mm, stamp rail 10 mm, focus 500 um); stamp z and arm z down keep the jog cap while the arm's `min_z_mm` is unknown |
+| `move_axis` | `device, axis, target` | M L | [Q] one axis to a typed position (mm; focus um), no distance cap for arm, stage, gantry and stamp rail since 2026-11-13 (stamp x/y 1 mm, focus 500 um; axis ranges still apply); stamp z and arm z down keep the jog cap while the arm's `min_z_mm` is unknown |
 | `arm_suction` | `device, on` | | arm nozzle suction (v1 M888 P2 + M1000 / M1003) |
 | `rotate_nozzle` | `device, deg` | M | arm nozzle rotation (v1 M2101) |
 | `set_switch` | `device, on, auto_off_s?` | L | relay on/off; `on` turns itself off after <= 10 s |

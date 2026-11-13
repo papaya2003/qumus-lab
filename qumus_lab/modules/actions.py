@@ -347,8 +347,8 @@ def register_common(m: Module) -> None:
     m.add(Action("move_axis", move_axis, {"device": {"type": "string", "enum": of(MOVERS)},
                                           "axis": {"type": "string"}, "target": {"type": "number"}},
                  ("device", "axis", "target"), motion=True, local_only=True, precheck=pre_move_axis,
-                 description="Move one axis to a typed position (mm; focus: um). At most 10 mm from where it is "
-                             "(stamp x/y 1 mm, focus 500 um); stamp z and arm z down keep the jog cap."))
+                 description="Move one axis to a typed position (mm; focus: um). No distance cap for arm, stage, gantry, "
+                             "stamp rail; stamp x/y 1 mm, focus 500 um; stamp z and arm z down keep the jog cap."))
     if of(("arm",)):
         m.add(Action("arm_suction", arm_suction, {"device": {"type": "string", "enum": of(("arm",))},
                                                   "on": {"type": "boolean"}}, ("device", "on"),

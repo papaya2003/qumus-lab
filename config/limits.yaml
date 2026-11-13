@@ -28,12 +28,13 @@ probe:
   reel_jog_max_deg: 10
   jog_feed_mm_min: 300          # arm / gantry feed used by jog and move_axis
   # move_axis (debug page "move to"): how far from the position just read one typed target may be.
-  # Stamp z and arm z down (while min_z_mm is null) keep the jog cap above.
-  arm_target_max_mm: 10
-  stage_target_max_mm: 10
-  gantry_target_max_mm: 10
+  # null = no distance cap (operator request 2026-11-13: the 10 mm cap made moves too slow). Axis ranges in
+  # `axes:` and arm min_z still apply; stamp z and arm z down (while min_z_mm is null) keep the jog cap above.
+  arm_target_max_mm: null
+  stage_target_max_mm: null
+  gantry_target_max_mm: null
   stamp_target_max_mm: 1        # stamp x / y
-  stamp_rail_target_max_mm: 10
+  stamp_rail_target_max_mm: null
   focus_target_max_um: 500
   switch_auto_off_max_s: 10
   first_heat_max_c: 40
