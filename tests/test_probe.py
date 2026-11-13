@@ -143,7 +143,7 @@ def test_l2_order_is_cameras_switches_motion_heater_per_module(cfg):
         kinds = [phase[step["kind"]] for m, _, step in plan if m == module]
         assert kinds == sorted(kinds), module
     jogs = [step for _, _, step in plan if step["kind"] == "jog"]
-    for out_step, back_step in zip(jogs[::2], jogs[1::2]):  # every move is directly followed by its return
+    for out_step, back_step in zip(jogs[::2], jogs[1::2], strict=True):  # every move is directly followed by its return
         assert (out_step["device"], out_step["axis"]) == (back_step["device"], back_step["axis"])
         assert out_step["mm"] == -back_step["mm"]
 
