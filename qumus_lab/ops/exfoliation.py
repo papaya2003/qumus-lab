@@ -34,31 +34,42 @@ def _point(ctx, name):
 
 
 def _stage_centre(ctx) -> tuple[float, float]:
-    """v1 get_exfoliation_stage_position: fixed (0, 256). Stored as the stage_chip_place point - (10, 0)."""
-    x, y, _ = _point(ctx, "stage_chip_place")["xyz"]
+    """v1 get_exfoliation_stage_position: fixed (0, 256). Stored as the stage_chip point - (10, 0)."""
+    x, y, _ = _point(ctx, "stage_chip")["xyz"]
     return float(x) - 10.0, float(y)
 
 
-def _pick_from_place(ctx, place: str) -> str:
-    """v1: G0 X Y Z30 F5000, G0 Z15 F5000, pick, G0 Z30 F5000 (robot_arm_controller.py:208-211)."""
+def _pick_from_place(ctx, place: str) -> tuple[str, dict]:
+    """v1: G0 X Y Z30 F5000, G0 Z15 F5000, pick, G0 Z30 F5000 (robot_arm_controller.py:208-211).
+    A slot with a measured stage_nozzle_deg is picked with the nozzle at 0 (the angle it was measured from)."""
     name, pt = c.place_point(ctx, place, ARM)
     az, z = float(pt.get("approach_z", 30)), float(pt["xyz"][2])
     c.move_point(ctx, ARM, name, z=az)
+    if c.slot_angle(pt) is not None:
+        c.rotate(ctx, ARM, 0.0)
     c.move_point(ctx, ARM, name, z=z)
     c.pick_item(ctx, ARM)
     c.move_point(ctx, ARM, name, z=az)
-    return name
+    return name, pt
+
+
+def _stage_angle(p: dict, pt: dict) -> float:
+    """Nozzle angle on the stage: an explicit angle_deg, else the slot's measured angle, else v1's 0."""
+    if p.get("angle_deg") is not None:
+        return float(p["angle_deg"])
+    a = c.slot_angle(pt)
+    return 0.0 if a is None else a
 
 
 def load_chip(ctx: ActionContext, p: dict) -> dict:
     """v1 place_silicon_chip_on_exfoliation_stage (robot_arm_controller.py:205-221)."""
     place = p["place"]
-    _pick_from_place(ctx, place)
+    _, pt = _pick_from_place(ctx, place)
     c.park(ctx, ARM)
-    c.rotate(ctx, ARM, float(p.get("angle_deg") or 0.0))
-    c.move_point(ctx, ARM, "stage_chip_place")                       # G0 X{sx+10} Y{sy} Z80 F5000
+    c.rotate(ctx, ARM, _stage_angle(p, pt))
+    c.move_point(ctx, ARM, "stage_chip")                             # G0 X{sx+10} Y{sy} Z80 F5000
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, "stage_chip_place", z=float(_point(ctx, "stage_chip_place")["approach_z"]),
+    c.move_point(ctx, ARM, "stage_chip", z=float(_point(ctx, "stage_chip")["approach_z"]),
                  feed=c.SLOW_F)                                       # G0 Z95 F1000
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, place, STAGE, sample_id=p.get("sample_id"))
@@ -68,12 +79,12 @@ def load_chip(ctx: ActionContext, p: dict) -> dict:
 def load_carrier(ctx: ActionContext, p: dict) -> dict:
     """v1 place_raw_crystal_carrier_on_exfoliation_stage (robot_arm_controller.py:244-262)."""
     place = p["place"]
-    _pick_from_place(ctx, place)
+    _, pt = _pick_from_place(ctx, place)
     c.park(ctx, ARM)
-    c.rotate(ctx, ARM, float(p.get("angle_deg") or 0.0))
-    c.move_point(ctx, ARM, "stage_carrier_place")                    # G0 X{sx} Y{sy-27} Z85 F5000
+    c.rotate(ctx, ARM, _stage_angle(p, pt))
+    c.move_point(ctx, ARM, "stage_carrier")                          # G0 X{sx} Y{sy-27} Z85 F5000 (v1 place z)
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, "stage_carrier_place", z=float(_point(ctx, "stage_carrier_place")["approach_z"]),
+    c.move_point(ctx, ARM, "stage_carrier", z=float(_point(ctx, "stage_carrier")["approach_z"]),
                  feed=c.SLOW_F)                                       # G0 Z95 F1000
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, place, STAGE, kind="carrier", sample_id=p.get("sample_id"))
@@ -87,17 +98,22 @@ def unload_chip(ctx: ActionContext, p: dict) -> dict:
     x, y, z = (float(v) for v in pt["xyz"])
     az = float(pt.get("approach_z", 30))
     sx, sy = _stage_centre(ctx)
-    angle = c.store_rotation(x + 10, y - 10, sx + 12, sy)
+    measured = c.slot_angle(pt)
+    # measured slot angle: pick on the stage at that angle, put down in the slot at 0 (the reverse of load_chip)
+    angle = 0.0 if measured is not None else c.store_rotation(x + 10, y - 10, sx + 12, sy)
+    dx, dy = c.store_offset(pt, 10.0, -10.0)
     c.park(ctx, ARM)
-    c.move_point(ctx, ARM, "stage_chip_pick", z=float(_point(ctx, "stage_chip_pick")["approach_z"]))  # Z95
-    c.move_point(ctx, ARM, "stage_chip_pick", feed=c.SLOW_F)         # G0 Z80 F1000
+    c.move_point(ctx, ARM, "stage_chip", z=float(_point(ctx, "stage_chip")["approach_z"]))  # Z95
+    if measured is not None:
+        c.rotate(ctx, ARM, measured)
+    c.move_point(ctx, ARM, "stage_chip", feed=c.SLOW_F)              # G0 Z80 F1000 (v1 pick X8)
     c.pick_item(ctx, ARM)
     c.park(ctx, ARM)
-    c.move_point(ctx, ARM, name, z=az, dx=10.0, dy=-10.0)            # G0 X{x+10} Y{y-10} Z30 F5000
+    c.move_point(ctx, ARM, name, z=az, dx=dx, dy=dy)                 # G0 X{x+10} Y{y-10} Z30 F5000
     c.rotate(ctx, ARM, angle)
-    c.move_point(ctx, ARM, name, z=z, dx=10.0, dy=-10.0)             # G0 Z15 F5000
+    c.move_point(ctx, ARM, name, z=z, dx=dx, dy=dy)                  # G0 Z15 F5000
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, name, z=az, dx=10.0, dy=-10.0)            # G0 Z30 F5000
+    c.move_point(ctx, ARM, name, z=az, dx=dx, dy=dy)                 # G0 Z30 F5000
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, STAGE, place, sample_id=p.get("sample_id"))
     return {"chip": sid, "from": STAGE, "to": place, "nozzle_deg": round(angle, 2)}
@@ -110,9 +126,12 @@ def unload_carrier(ctx: ActionContext, p: dict) -> dict:
     x, y, z = (float(v) for v in pt["xyz"])
     az = float(pt.get("approach_z", 30))
     sx, sy = _stage_centre(ctx)
-    angle = c.store_rotation(x, y, sx, sy - 27)
-    c.move_point(ctx, ARM, "stage_carrier_pick", z=float(_point(ctx, "stage_carrier_pick")["approach_z"]))
-    c.move_point(ctx, ARM, "stage_carrier_pick", feed=c.SLOW_F)      # G0 Z82 F1000
+    measured = c.slot_angle(pt)
+    angle = 0.0 if measured is not None else c.store_rotation(x, y, sx, sy - 27)
+    c.move_point(ctx, ARM, "stage_carrier", z=float(_point(ctx, "stage_carrier")["approach_z"]))
+    if measured is not None:
+        c.rotate(ctx, ARM, measured)
+    c.move_point(ctx, ARM, "stage_carrier", feed=c.SLOW_F)           # G0 Z82 F1000
     c.pick_item(ctx, ARM)
     c.park(ctx, ARM)
     c.move_point(ctx, ARM, name, z=az)

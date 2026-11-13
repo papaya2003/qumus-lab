@@ -12,6 +12,16 @@
 #
 # v1 computed many arm points as "stage centre + offset"; the absolute numbers below are those sums
 # for v1's fixed stage centres (left (0, 256), right (10, 300); robot_arm_controller.py:115, :141).
+#
+# One point per place (operator decision 2026-11-13): an arm picks and places at the same measured point.
+# v1 used slightly different numbers for its place and pick moves; the point keeps v1's place x/y and its
+# (lower) pick z, and the comment gives the other v1 value.
+#
+# Nozzle angle per slot (operator decision 2026-11-13): a board slot may carry
+#   stage_nozzle_deg  - chip / carrier slots: the nozzle angle on the work stage that sets an object, picked
+#                       square from this slot with the nozzle at 0, square on the stage;
+#   holder_nozzle_deg - stamp slots: the same for the stamp holder.
+# Measured at L3 (docs/l3-measurements.csv). Without it the ops keep v1's angles (0 / store_rotation / 50).
 
 version: 1
 
@@ -27,10 +37,8 @@ zones:
 points:
   arm_left:
     park:              {xyz: [0, 220, 95],   source: v1, cite: {at: "common/hardware/robot_arm_controller.py:171", check: "X0 Y220 Z95"}}
-    stage_chip_place:  {xyz: [10, 256, 80],  approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:217", check: "sx + 10"}}
-    stage_chip_pick:   {xyz: [8, 256, 80],   approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:301", check: "sx + 8"}}
-    stage_carrier_place: {xyz: [0, 229, 85], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:258", check: "sy - 27"}}
-    stage_carrier_pick:  {xyz: [0, 229, 82], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:366", check: "Z82"}}
+    stage_chip:        {xyz: [10, 256, 80],  approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:217", check: "sx + 10"}}   # v1 pick: X8 (:301)
+    stage_carrier:     {xyz: [0, 229, 82],   approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:366", check: "Z82"}}      # v1 place: Z85 (:258)
     massage_start:     {xyz: [-13, 298, 74], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:400", check: "mx - 13"}}
     slot_S1:  {xyz: [200, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:14", check: "(200, 160)"}}
     slot_S2:  {xyz: [240, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:15", check: "(240, 160)"}}
@@ -63,12 +71,10 @@ points:
 
   arm_right:
     park:              {xyz: [0, 260, 140],  source: v1, cite: {at: "common/hardware/robot_arm_controller.py:181", check: "X0 Y260 Z140"}}
-    stage_chip_place:  {xyz: [0, 300, 132],  approach_z: 140, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:238", check: "sx - 10"}}
-    stage_chip_pick:   {xyz: [0, 300, 130],  approach_z: 140, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:337", check: "Z130"}}
+    stage_chip:        {xyz: [0, 300, 130],  approach_z: 140, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:337", check: "Z130"}}     # v1 place: Z132 (:238)
     stamp_pick:        {xyz: [254, 190, 16], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:267", check: "X254 Y190 Z150"}}
     stamp_via:         {xyz: [200, 275, 150], source: v1, cite: {at: "common/hardware/robot_arm_controller.py:272", check: "X200 Y275 Z150"}}
-    stamp_place:       {xyz: [42, 275, 134], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:276", check: "X42 Y275 Z150"}}
-    stamp_recycle_pick: {xyz: [42, 276, 134], approach_z: 150, source: v1, cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:27", check: "PICK_Y = 276.0"}}
+    stamp_holder:      {xyz: [42, 275, 134], approach_z: 150, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:276", check: "X42 Y275 Z150"}}  # v1 recycle pick: Y276
     stamp_bin:         {xyz: [-250, 250, 15], approach_z: 100, source: v1, cite: {at: "agents/processing_agent/workflows/stacking/molecule_flows/molecule_recycle_stamp.py:30", check: "RECYCLE_X = -250.0"}}
     slot_S1:  {xyz: [-320, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:31", check: "(-320, 160)"}}
     slot_S2:  {xyz: [-280, 160, 14], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:32", check: "(-280, 160)"}}

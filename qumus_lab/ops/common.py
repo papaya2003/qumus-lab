@@ -109,6 +109,18 @@ def park(ctx: ActionContext, arm_id: str) -> dict:
     return move_point(ctx, arm_id, "park")
 
 
+def slot_angle(pt: dict, key: str = "stage_nozzle_deg") -> float | None:
+    """The measured nozzle angle a board slot carries for the work stage (points.yaml header), else None."""
+    v = pt.get(key)
+    return None if v is None else float(v)
+
+
+def store_offset(pt: dict, dx: float, dy: float) -> tuple[float, float]:
+    """v1 stored chips a little beside the slot centre it picked from (e.g. x+10, y-10). A measured slot point
+    is where the object sits, so it gets no offset."""
+    return (0.0, 0.0) if pt.get("source") == "measured" else (dx, dy)
+
+
 def store_rotation(x: float, y: float, sx: float, sy: float) -> float:
     """v1 nose angle for storing (robot_arm_controller.py:286-299): |90 - angle between (x, y) and (sx, sy)|."""
     n1, n2 = math.hypot(x, y), math.hypot(sx, sy)
