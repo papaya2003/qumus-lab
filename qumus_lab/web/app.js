@@ -120,13 +120,14 @@ const FACTS = {
 const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
 const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
 
-/* One block per physical unit, in bench order. A device not listed here goes to its kind's block (arm) or to
-   "Other devices", so a new device in devices.yaml still shows up. */
+/* One block per physical unit, in bench order, arranged in columns (a short block shares a column, so none is
+   left alone on a second row). A device not listed here goes to its kind's block (arm) or to "Other devices",
+   so a new device in devices.yaml still shows up. */
 const UNITS = {
-  exfoliation: [["Arm", ["arm_left"]], ["Tape", ["tape_gantry", "tape_reels"]],
-                ["Exfoliation stage", ["exfoliation_heater", "exfoliation_vacuum", "exfoliation_fan"]]],
-  stacking: [["Arm", ["arm_right"]], ["Sample stage", ["sample_stage", "stage_vacuum", "transfer_heater"]],
-             ["Stamp", ["stamp", "stamp_vacuum"]], ["Microscope", ["focus", "turret"]]],
+  exfoliation: [[["Arm", ["arm_left"]]], [["Tape", ["tape_gantry", "tape_reels"]]],
+                [["Exfoliation stage", ["exfoliation_heater", "exfoliation_vacuum", "exfoliation_fan"]]]],
+  stacking: [[["Arm", ["arm_right"]]], [["Sample stage", ["sample_stage", "stage_vacuum", "transfer_heater"]]],
+             [["Stamp", ["stamp", "stamp_vacuum"]], ["Microscope", ["focus", "turret"]]]],
 };
 // Short names inside a block (the device id stays beside it, small, because the L3 sheet and points.yaml use it).
 const LABELS = {
@@ -302,7 +303,7 @@ function motionCard(mod, d) {
   if (d.kind === "arm" && m.describe.commands.rotate_nozzle) {
     // v1 rotate_nose: M2100 then M2101 R<integer deg> turns the nozzle BY that much from where it is (as in v1;
     // the arm does not report its angle). The box keeps what you typed until the turn was accepted.
-    const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle: turn by (deg)`, class: "mono", placeholder: "turn by" });
+    const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle: turn by (deg)`, class: "mono", placeholder: "turn by (deg)" });
     const now = h("div", { class: "axis__now", title: "The nozzle turns BY the typed angle from where it is (v1 M2101 R). Since pick resets when suction turns on: it is the slot angle when you measure one." }, "turns by this much from where it is now");
     const rot = h("button", { type: "button", class: "sm", "data-action": "rotate_nozzle", "data-tip": "turn the nozzle by the typed angle (v1 M2101 R)" }, "Turn");
     const turn = async () => {
@@ -321,7 +322,7 @@ function motionCard(mod, d) {
     rot.addEventListener("click", turn);
     inp.addEventListener("input", () => inp.classList.toggle("dirty", inp.value !== ""));
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); turn(); } });
-    el.append(h("div", { class: "axis axis--note" }, h("span", { class: "axis__name" }, "nozzle", h("span", { class: "axis__unit" }, "deg")), inp, rot, h("span"), now));
+    el.append(h("div", { class: "axis axis--note" }, h("span", { class: "axis__name" }, "nozzle"), inp, rot, h("span"), now));
     rows.nozzle = { inp, now, nozzle: true };
   }
   if (m.describe.commands.move_axis) {
@@ -423,7 +424,7 @@ function renderMotion(m, mod, ui, st) {
     if (r.nozzle) {
       // the arm cannot report its angle: the driver counts the turns (since the last pick = a slot's angle)
       const pick = st.nozzle_since_pick_deg, total = st.nozzle_turned_deg;
-      r.now.textContent = typeof pick === "number" ? `turned since pick ${pick} deg · since connect ${total} deg` : "turns by this much from where it is now";
+      r.now.textContent = typeof pick === "number" ? `since pick ${pick}° · total ${total}°` : "turns by this much from where it is now";
       continue;
     }
     const cur = st[axisKey(ui.kind, axis)];
@@ -733,7 +734,10 @@ async function stopAll() {
       out.push(`${name}: ${r.data ? r.data.stop : r.status}`);
     } catch (e) { out.push(`${name}: not reachable`); }
   }));
-  $("#stopresult").textContent = "Stop " + out.join(", ");
+  const res = $("#stopresult");
+  res.textContent = "Stop " + out.join(", ");
+  clearTimeout(stopAll.t);
+  stopAll.t = setTimeout(() => { res.textContent = ""; }, 15000);  // the Events log keeps the full record
 }
 
 /* ------------------------------------------------------------------ module tabs */
@@ -779,14 +783,16 @@ function buildModule(name, d) {
   for (const dev of cams) $(".cams", el).append(cameraCard(name, dev, dev === scope ? turret : null));
   if (!cams.length) $(".band--cams", el).classList.add("is-empty");
   // one block per physical unit; devices not in UNITS: an arm to "Arm", the rest to "Other devices"
-  const blocks = (UNITS[name] || []).map(([title, ids]) => ({ title, ids, devs: [] }));
-  const block = (title) => blocks.find((b) => b.title === title) || (blocks.push({ title, ids: [], devs: [] }), blocks[blocks.length - 1]);
+  const blocks = (UNITS[name] || []).flatMap((col, i) => col.map(([title, ids]) => ({ title, ids, col: i, devs: [] })));
+  const block = (title) => blocks.find((b) => b.title === title)
+    || (blocks.push({ title, ids: [], col: 99, devs: [] }), blocks[blocks.length - 1]);
   for (const dev of d.devices) {
     if (dev.kind === "camera" || (dev === turret && scope)) continue;
     const home = blocks.find((b) => b.ids.includes(dev.id));
     (home || block(dev.kind === "arm" ? "Arm" : "Other devices")).devs.push(dev);
   }
   const units = $(".units", el);
+  const cols = {};
   for (const b of blocks) {
     if (!b.devs.length) continue;
     b.devs.sort((x, y) => (b.ids.indexOf(x.id) + 1 || 99) - (b.ids.indexOf(y.id) + 1 || 99));
@@ -797,7 +803,8 @@ function buildModule(name, d) {
       else if (dev.kind === "switch") body.append(switchCard(name, dev));
       else body.append(genericCard(name, dev));
     }
-    units.append(h("section", { class: "unit", "aria-label": b.title }, h("h2", { class: "unit__title" }, b.title), body));
+    if (!cols[b.col]) units.append(cols[b.col] = h("div", { class: "units__col" }));
+    cols[b.col].append(h("section", { class: "unit", "aria-label": b.title }, h("h2", { class: "unit__title" }, b.title), body));
   }
   m.tab = tabFor(name, MODULE_TITLES[name] || name, d.service);
   $("#modnav").append(m.tab.button);

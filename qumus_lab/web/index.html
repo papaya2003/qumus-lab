@@ -43,11 +43,11 @@
 </div>
 
 <footer class="estop">
-  <div class="estop__inner">
-    <button id="stopall" type="button" class="estop__btn">STOP ALL</button>
-    <p class="estop__note">Stops every axis of both modules and switches both heaters off. Works without control.</p>
-    <span id="stopresult" class="estop__result"></span>
-  </div>
+  <span id="stopresult" class="estop__result" role="status"></span>
+  <button id="stopall" type="button" class="estop__btn" title="Stops every axis of both modules and switches both heaters off. Works without control.">
+    <span class="estop__icon" aria-hidden="true"><i></i></span>
+    <span class="estop__text"><b>STOP ALL</b><small>all axes · heaters off</small></span>
+  </button>
 </footer>
 
 <template id="tpl-module">
