@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from ..drivers.base import DriverError
+from ..drivers.base import DriverError, OutcomeUnknown
 from ..safety.gate import Rejected
 from .base import Action, ActionContext, Module
 
@@ -238,6 +238,39 @@ def rotate_nozzle(ctx: ActionContext, p: dict) -> dict:
 
 
 # ------------------------------------------------------------------------- switches & heat
+def known_state(ctx: ActionContext, p: dict) -> dict:
+    """Put every on/off whose state is unknown into its safe state, so the page can show on/off.
+
+    The relay boards, the arm pump and the printer's motor enable cannot be queried (v1 had no query
+    either), so after connecting their state is unknown until something is sent. Sent when a person takes
+    control on the debug page (Jialei's choice, 2026-11-13). Only devices whose state is unknown are touched,
+    so a switch someone turned on on purpose stays on. Safe state: arm suction off, gantry motors off (the
+    next move turns them on again), relays off, except relays whose safe state is on (stamp vacuum, holds the
+    stamp slide). A relay that does not confirm raises OutcomeUnknown as a single set_switch would.
+    """
+    done, errors = {}, {}
+    order = sorted(ctx.module.devices.values(), key=lambda d: d.kind == "switch")  # relays last
+    for dev in order:
+        try:
+            if dev.kind == "arm" and getattr(dev, "vacuum_on", False) is None and dev.connected:
+                dev.set_vacuum(False)
+                done[dev.id] = "suction off"
+            elif dev.kind == "gantry" and getattr(dev, "motors_on", False) is None and dev.connected:
+                dev.power(False)
+                done[dev.id] = "motors off"
+            elif dev.kind == "switch" and getattr(dev, "on", False) is None and dev.connected:
+                on = bool(getattr(dev, "safe_on", False))
+                ctx.module.cancel_auto_off(dev.id)
+                dev.set(on)
+                done[dev.id] = "on" if on else "off"
+        except OutcomeUnknown:
+            raise
+        except DriverError as exc:
+            dev.last_error = str(exc)
+            errors[dev.id] = str(exc)
+    return {"set": done, "errors": errors}
+
+
 def set_switch(ctx: ActionContext, p: dict) -> dict:
     dev = ctx.device(p["device"], ("switch",))
     on = bool(p["on"])
@@ -356,6 +389,10 @@ def register_common(m: Module) -> None:
         m.add(Action("rotate_nozzle", rotate_nozzle, {"device": {"type": "string", "enum": of(("arm",))},
                                                       "deg": {"type": "number", "minimum": -180, "maximum": 180}},
                      ("device", "deg"), motion=True, description="Rotate the arm nozzle (v1 M2101 R<deg>)."))
+    if of(("arm", "gantry", "switch")):
+        m.add(Action("known_state", known_state, local_only=True,
+                     description="Put every on/off whose state is unknown (relays, arm suction, gantry motors) into its "
+                                 "safe state; devices with a known state are left as they are."))
     if of(("switch",)):
         m.add(Action("set_switch", set_switch, {"device": {"type": "string", "enum": of(("switch",))},
                                                 "on": {"type": "boolean"},

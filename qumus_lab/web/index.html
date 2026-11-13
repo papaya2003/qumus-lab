@@ -14,19 +14,21 @@
 <header class="topnav">
   <div class="topnav__inner">
     <span class="wordmark">Qumus <span class="wordmark__sub">lab bench</span></span>
-    <nav class="tabs" aria-label="Modules"><div id="modnav" class="tabs__list" role="tablist"></div></nav>
     <div class="topnav__badges">
       <span id="mode" class="badge">connecting</span>
       <span id="devmode" class="badge badge--dev" hidden
         title="limits.yaml dev_mode: true. Jog and typed-move caps, first-heat caps, switch auto-off cap and move confirmations are off. Heater limits, axis ranges, zone lock and STOP ALL still apply.">Development mode</span>
     </div>
     <div class="topnav__control">
-      <span id="leaseinfo" class="muted small">Reading only. Moves, switches and heating need control.</span>
+      <span id="leaseinfo" class="muted small" hidden></span>
       <button id="take" type="button" class="btn btn--primary" aria-pressed="false">Take control</button>
     </div>
   </div>
 </header>
 
+<div class="layout">
+<nav class="side" aria-label="Modules"><div id="modnav" class="side__list" role="tablist"></div></nav>
+<div class="content">
 <main id="bench" class="bench" aria-live="polite"></main>
 
 <section class="events" aria-label="Events">
@@ -37,6 +39,8 @@
   </div>
   <ol id="events" class="events__list"></ol>
 </section>
+</div>
+</div>
 
 <footer class="estop">
   <div class="estop__inner">

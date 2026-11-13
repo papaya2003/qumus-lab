@@ -556,8 +556,7 @@ function cameraCard(mod, d, turret) {
     h("img", { alt: `last captured picture from ${d.id}` }));
   const tools = h("div", { class: "cam__tools" }, live, guarded(mod, "capture", "Capture", () => ({ camera: d.id })));
   const objective = h("span", { class: "cam__info" });
-  const view = h("div", { class: "cam__view", title: "click to enlarge / shrink" }, img, last);
-  view.addEventListener("click", (e) => { if (!e.target.closest("a")) el.classList.toggle("is-big"); });
+  const view = h("div", { class: "cam__view" }, img, last);
   const bar = h("div", { class: "cam__bar" }, h("span", { class: "dot" }), h("span", { class: "cam__name" }, d.id.replace(/_camera/, "").replace(/_/g, " ")), info, tools);
   if (turret) bar.append(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
   el.append(bar, view, h("div", { class: "err" }));
@@ -685,8 +684,11 @@ async function pollState() {
   }
   const holders = Object.values(modules).map((m) => m.state && m.state.lease && m.state.lease.holder).filter(Boolean);
   const other = holders.find((x) => x !== CLIENT);
-  $("#leaseinfo").textContent = control ? (other ? `Another client (${other}) holds control of a module.` : "You have control of both modules.")
-    : (other ? `Controlled by ${other}. Reading only.` : "Reading only. Moves, switches and heating need control.");
+  // the top bar says something only when another client holds control; the rest is the button's tooltip
+  const info = $("#leaseinfo");
+  info.textContent = other ? `Controlled by ${other}` : "";
+  info.hidden = !other;
+  $("#take").title = control ? "You have control of both modules. Click to release." : "Reading only. Moves, switches and heating need control.";
 }
 
 async function heartbeat() {
@@ -823,8 +825,12 @@ async function boot() {
     control = !control;
     take.setAttribute("aria-pressed", String(control));
     take.textContent = control ? "Release control" : "Take control";
-    if (control) await heartbeat();
-    else for (const name of Object.keys(modules)) await api(name, "POST", "/api/release", {});
+    if (control) {
+      await heartbeat();
+      // relays, arm suction and gantry motors cannot be read: put the unknown ones into their safe state so the
+      // toggles show on / off (Jialei's choice, 2026-11-13; known ones are left as they are)
+      for (const [name, m] of Object.entries(modules)) if (m.describe.commands.known_state) await send(name, "known_state");
+    } else for (const name of Object.keys(modules)) await api(name, "POST", "/api/release", {});
     pollState();
   });
   $("#evwarn").addEventListener("change", renderEvents);
