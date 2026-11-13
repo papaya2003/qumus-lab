@@ -118,7 +118,9 @@ def handle_api(svc: ContractService, method: str, path: str, query: dict, header
     if path == "/api/command":
         return 202, svc.command(payload, client, loopback), "application/json"
     if path == "/api/stop":
-        return 200, svc.stop(wait_s=float(payload.get("wait_s", 0) or 0), reason=f"api_stop by {client}",
+        # Stop first, validate later: a malformed wait_s must never keep the stop from running (svc.stop
+        # treats anything that is not a number as 0).
+        return 200, svc.stop(wait_s=payload.get("wait_s", 0), reason=f"api_stop by {client}",
                              heat_off=bool(payload.get("heat_off", False))), "application/json"
     if path == "/api/heartbeat":
         return 200, svc.heartbeat(client), "application/json"

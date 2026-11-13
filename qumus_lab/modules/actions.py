@@ -79,20 +79,25 @@ def _split_point(module: Module, qualified: str) -> tuple[str, str]:
 def go_to_point(ctx: ActionContext, p: dict) -> dict:
     dev_id, _ = _split_point(ctx.module, p["point"])
     zones = ctx.module.zones
+    if zones is not None:
+        zones.check_enter(dev_id, p["point"])
+    # Every refusal (device offline, point not measured, z below min_z, range) happens here, before the zone
+    # registry counts the arm as inside: a refused move used to leave the arm marked inside the middle board.
+    run = _prepare_go_to_point(ctx, p)
     if zones is None:
-        return _go_to_point(ctx, p)
-    zones.check_enter(dev_id, p["point"])
+        return run()
     zones.move_started(dev_id, p["point"])
     ok = False
     try:
-        out = _go_to_point(ctx, p)
+        out = run()
         ok = True
         return out
     finally:
         zones.move_finished(dev_id, p["point"], ok)
 
 
-def _go_to_point(ctx: ActionContext, p: dict) -> dict:
+def _prepare_go_to_point(ctx: ActionContext, p: dict):
+    """Check everything for a go_to_point and return the function that moves (no device command yet)."""
     dev_id, name = _split_point(ctx.module, p["point"])
     pt = ctx.gate.check_point(dev_id, name)
     dev = ctx.device(dev_id)
@@ -100,23 +105,31 @@ def _go_to_point(ctx: ActionContext, p: dict) -> dict:
         x, y, z = (float(v) for v in pt["xyz"])
         feed = ctx.gate.arm_feed(dev_id)
         ctx.gate.check_arm_z(dev_id, z)
-        if pt.get("approach_z") is not None:
-            az = float(pt["approach_z"])
+        az = float(pt["approach_z"]) if pt.get("approach_z") is not None else None
+        if az is not None:
             ctx.gate.check_arm_z(dev_id, az)
+
+        def run_arm():
+            if az is not None:
+                ctx.check()
+                dev.move_to(x, y, az, feed)
             ctx.check()
-            dev.move_to(x, y, az, feed)
-        ctx.check()
-        return dev.move_to(x, y, z, feed)
+            return dev.move_to(x, y, z, feed)
+        return run_arm
     if dev.kind in ("stage", "manipulator"):
         pos = pt["pos"]
         order = pt.get("order") or list(pos)
         for axis in order:
             ctx.gate.check_axis_target(dev_id, axis, float(pos[axis]), for_point=True)
-        for axis in order:
-            ctx.check()
-            dev.move_to(axis, float(pos[axis]))
-        return dev.snapshot()
+
+        def run_axes():
+            for axis in order:
+                ctx.check()
+                dev.move_to(axis, float(pos[axis]))
+            return dev.snapshot()
+        return run_axes
     raise Rejected(f"{dev_id} has no go_to_point (kind {dev.kind})")
+
 
 
 def jog(ctx: ActionContext, p: dict) -> dict:

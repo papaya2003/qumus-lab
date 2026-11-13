@@ -7,7 +7,8 @@ then set the hold voltage; at the end output off and relay off.
 Changed on purpose:
 - every heat has a mandatory timeout; at the timeout the output goes off (v1 could heat forever);
 - the other heater's relay is switched off *before* the supply output goes on;
-- above ``target + overshoot_c`` the output is switched off until the temperature falls back;
+- above ``target + overshoot_c`` (and never above ``max_c``) the output is switched off until the temperature
+  falls back;
 - three failed thermometer reads in a row switch the heater off;
 - mode ``until`` (used by the L2 probe): apply a fixed low voltage and switch off at the target;
 - any error in the control thread switches the heater off (the thread never ends with the supply on);
@@ -218,7 +219,9 @@ class Heater(Device):
                 if self.phase == "boost" and t >= self.target_c and getattr(self, "auto_hold", True):
                     self.psu.set_voltage(hold_v)
                     self.phase = "hold"
-                if t > self.target_c + self.overshoot_c and output_on:
+                # Cut the output above target + overshoot_c, and never above the configured max_c (a 170 C
+                # target with 15 C overshoot used to allow 185 C, over the 175 C limit).
+                if t > min(self.target_c + self.overshoot_c, self.max_c) and output_on:
                     self.psu.output(False)
                     self.phase = "overshoot_off"
                 elif not output_on and t < self.target_c:

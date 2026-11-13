@@ -25,7 +25,8 @@ MOTHER_TAPE_RELEASE_DEG = 120.0
 # rows y + 0, 3, ... 15, each row `rounds` times
 MASSAGE_DX = (-13.0, 15.0)
 MASSAGE_ROWS = tuple(range(0, 16, 3))
-MASSAGE_Z = 74.0
+# The stroke height is the z of the measured massage_start point (v1 Z74). It used to be a fixed 74.0, which
+# ignored a different measured z and could press the nozzle into the stage.
 
 
 def _point(ctx, name):
@@ -129,11 +130,11 @@ def massage(ctx: ActionContext, p: dict) -> dict:
     if not 1 <= rounds <= 5:
         raise Rejected("rounds must be 1..5")
     start = _point(ctx, "massage_start")
-    mx, my = float(start["xyz"][0]) - MASSAGE_DX[0], float(start["xyz"][1])
+    mx, my, mz = float(start["xyz"][0]) - MASSAGE_DX[0], float(start["xyz"][1]), float(start["xyz"][2])
     top = float(start.get("approach_z", 95))
     c.park(ctx, ARM)
     c.move(ctx, ARM, mx, my, top, c.TRAVEL_F, point="massage_start")
-    c.move(ctx, ARM, mx + MASSAGE_DX[0], my, MASSAGE_Z, c.TRAVEL_F, point="massage_start")
+    c.move(ctx, ARM, mx + MASSAGE_DX[0], my, mz, c.TRAVEL_F, point="massage_start")
     strokes = 0
     for dy in MASSAGE_ROWS:
         for _ in range(rounds):

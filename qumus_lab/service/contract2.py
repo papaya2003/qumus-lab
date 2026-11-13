@@ -464,10 +464,12 @@ class Station:
         if route == ["command"]:
             return w.command(client, payload, loopback)
         if route == ["stop"]:
+            # Contract 2 section 15.1: stop always works. A wait_s that is not a number in 0..15 is treated as 0
+            # (or clamped) instead of refusing the stop, which used to leave everything moving.
             wait_s = payload.get("wait_s", 0)
-            if not isinstance(wait_s, int | float) or isinstance(wait_s, bool) or not 0 <= wait_s <= 15:
-                raise Refusal("bad_params", "wait_s must be 0..15")
-            return 200, w.stop(client, float(wait_s), bool(payload.get("heat_off", False)))
+            if not isinstance(wait_s, int | float) or isinstance(wait_s, bool) or wait_s != wait_s:
+                wait_s = 0
+            return 200, w.stop(client, min(max(float(wait_s), 0.0), 15.0), bool(payload.get("heat_off", False)))
         raise Refusal("not_found", f"no route POST {path}")
 
 
