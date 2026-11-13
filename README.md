@@ -1,5 +1,7 @@
 # qumus-lab
 
+**Qumus v2.2 · stage 2 · real-lab station drivers.** Driven by [qumus-agent](https://github.com/papaya2003/qumus-agent) (the brain) through [lab-contract](https://github.com/papaya2003/lab-contract); the simulated counterpart is [qumus-simlab](https://github.com/papaya2003/qumus-simlab).
+
 Software for the Qumus lab PC (Windows, Sanfeng Wu lab): drivers for every instrument of the
 **exfoliation** module (left side of the bench) and the **stacking** module (right side), a SafetyGate
 that checks every command, and one HTTP service per module that speaks the shared
