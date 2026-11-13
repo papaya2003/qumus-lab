@@ -139,7 +139,7 @@ class JobRunner:
                                       requested_by=requested_by, meta={"module": self.svc.name})
         job = _Job(run_id, action.name, params, client, project_id, action.fn, gctx)
         self.queue.append(job)
-        if self._thread is None or not self._thread.is_alive():
+        if self._thread is None:
             self._thread = threading.Thread(target=self._loop, daemon=True, name=f"jobs-{self.svc.name}")
             self._thread.start()
         return {"run_id": run_id, "flow": action.name, "queued_behind": len(self.queue) - 1 + (1 if self.current else 0)}
@@ -195,12 +195,17 @@ class JobRunner:
         while True:
             with self.svc.lock:
                 if not self.queue:
+                    # Forget this worker under the lock: a job submitted after we release it must start a new
+                    # worker. Checking is_alive() there missed this thread while it was still finishing, and the
+                    # new job then stayed queued with no worker.
                     self.current = None
+                    self._thread = None
                     return
                 if self.svc.locked:  # queued jobs never start by themselves on a locked module
                     while self.queue:
                         self._end(self.queue.popleft().run_id, "cancelled", None, {"reason": "module locked"})
                     self.current = None
+                    self._thread = None
                     return
                 job = None
                 if self.svc.busy_command is None:

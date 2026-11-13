@@ -9,6 +9,8 @@ code (checked by running it against main before the fix).
 5. A malformed wait_s never prevents the stop (contract v1 and contract 2 routes).
 6. advance_tape powers reel 2 again when the rotation fails.
 7. A refused go_to_point (device offline) does not leave the arm counted inside the middle board.
+8. A job submitted while the previous worker thread is still finishing gets a worker (was stuck queued).
+9. exfoliate_chips with chip_ids and no num_chips exfoliates every given chip (as the sim lab does).
 """
 
 from __future__ import annotations
@@ -221,3 +223,49 @@ def test_refused_go_to_point_does_not_count_the_arm_inside(stack):
     assert svc.state()["zones"]["middle_board"]["inside"] == []
     r = svc.command({"action": "zone_release", "zone": "middle_board", "device": "arm_right"}, "agent", loopback=True)
     assert wait_done(svc, r["command_id"])["result"] == "ok"
+
+
+# ------------------------------------------------------------------------------------- jobs (L5)
+class _Flow:
+    def __init__(self, name, fn):
+        self.name, self.fn = name, fn
+
+
+def test_job_submitted_while_the_worker_is_finishing_still_runs(stack):
+    svc = stack.services["stacking"]
+    runner = svc.jobs
+    orig_loop = runner._loop
+    tail = threading.Event()
+    release = threading.Event()
+
+    def loop_then_linger():  # the worker returns from _loop, but its thread is still alive for a moment
+        orig_loop()
+        tail.set()
+        release.wait(5)
+    runner._loop = loop_then_linger
+    ran = []
+    gctx = GateContext("pytest", True, True)
+    try:
+        with svc.lock:
+            runner.submit_locked(_Flow("first", lambda ctx, p: ran.append("first") or {}), {}, "pytest", gctx)
+        assert tail.wait(5)                                    # first job done, worker thread still alive
+        with svc.lock:
+            runner.submit_locked(_Flow("second", lambda ctx, p: ran.append("second") or {}), {}, "pytest", gctx)
+        wait_for(lambda: "second" in ran, timeout=3)
+    finally:
+        release.set()
+
+
+def test_exfoliate_chips_takes_the_count_from_chip_ids(stack, monkeypatch):
+    from qumus_lab.flows import exfoliate_chips
+    from qumus_lab.ops import exfoliation as ox
+    from qumus_lab.sim.bench import seed_demo_bench
+
+    seed_demo_bench(stack.store)
+    m = stack.services["exfoliation"].module
+    done = []
+    monkeypatch.setattr(ox, "prepare_mother_tape", lambda ctx, p: {})
+    monkeypatch.setattr(ox, "exfoliate_chip", lambda ctx, p: done.append(p["chip_place"]) or {})
+    out = exfoliate_chips(_ctx(m), {"material": "hBN", "chip_ids": ["chip_001", "chip_002", "chip_003"]})
+    assert done == ["left_chip_1", "left_chip_2", "left_chip_3"]
+    assert [c["chip_id"] for c in out["chips"]] == ["chip_001", "chip_002", "chip_003"]

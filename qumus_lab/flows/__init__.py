@@ -53,7 +53,9 @@ def exfoliate_chips(ctx, p: dict) -> dict:
     material = norm_material(p.get("material"))
     if not material:
         raise Rejected("material is required")
-    n = int(p.get("num_chips") or 1)
+    # Given chip_ids set the count, as in the sim lab (qumus-simlab flows/library/exfoliation.py:
+    # p.num_chips = len(p.chip_ids)); num_chips alone used to win and silently skip the other chips.
+    n = len(p["chip_ids"]) if p.get("chip_ids") else int(p.get("num_chips") or 1)
     samples = st.list_samples()
     # carrier: given slot, else the left-board carrier whose material matches
     carrier_slot = p.get("carrier_slot")
