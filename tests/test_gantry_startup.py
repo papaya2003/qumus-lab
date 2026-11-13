@@ -84,3 +84,35 @@ def test_position_query_consumes_its_delayed_acknowledgement():
         assert port.in_waiting == 0
     finally:
         gantry.close()
+
+
+def test_stop_of_an_idle_gantry_sends_no_quick_stop():
+    """Bench 2026-11-13: after M410 the Prusa acknowledged moves but its motors no longer turned until it was
+    restarted. A finished move (M400 acknowledged) leaves nothing to stop, so no M410 is sent."""
+    emulator = MotorGatedPrinter()
+    gantry, port = _gantry(emulator)
+    try:
+        assert gantry.stop() is None  # connected, never moved
+        gantry.clear_stop()
+        gantry.move(x=-10, feed=300, relative=True)  # move() ends with M400
+        assert gantry.motion_pending is False
+        assert gantry.stop() is None
+        assert b"M410" not in bytes(port.tx)
+        assert gantry.quick_stopped is False
+    finally:
+        gantry.close()
+
+
+def test_stop_while_a_move_may_run_still_sends_quick_stop():
+    emulator = MotorGatedPrinter()
+    gantry, port = _gantry(emulator)
+    try:
+        gantry.set_relative(True)
+        gantry.line(x=-10, feed=300)  # queued, no M400 yet: the gantry may be moving
+        assert gantry.motion_pending is True
+        assert gantry.stop() is True
+        assert bytes(port.tx).endswith(b"M410\n")
+        assert gantry.quick_stopped is True
+        assert "restart the Prusa" in gantry.last_error
+    finally:
+        gantry.close()

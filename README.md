@@ -47,20 +47,22 @@ code that will talk to the real instruments.
    scripts\probe.bat l1             :: every device of both modules, report in runs\real-lab\probe\
    ```
 
-4. **L2, one actuator at a time** (asks Enter before each step; both arms' Z tests: +10 mm then -10 mm,
+4. **L2, one actuator at a time** (asks Enter before each step; exfoliation module first, then stacking,
+   each in the same order: cameras, switches, motion, heater last. Every move is followed by its move back.
+   Both arms' Z tests: +10 mm then -10 mm,
    configured by each arm's `probe_z_jog_max_mm` in `config/limits.yaml`; ensure 10 mm clearance.
-   Tape gantry X: +10 mm first then -10 mm back. `probe.gantry_l2_axis` selects X or Z;
-   `probe.gantry_first_sign` selects +1 or -1. Observe which physical direction each sign produces.
+   Tape gantry X: -10 mm first then +10 mm back (`probe.gantry_x_first_sign`). Tape gantry Z: +5 mm first
+   then -5 mm back (`probe.gantry_z_l2_mm`, `probe.gantry_z_first_sign`): observe whether Z+ is up or down.
    Other arm axes/stage caps: 0.5 mm. Stamp Z: -5 mm then +5 mm (other stamp axes: 0.1 mm).
    Focus: -5 mm then +5 mm, with operator-confirmed clearance; expected travel time about 30 s each way.
    Switches turn themselves off after <= 10 s, first heats <= 40 C;
-   exfoliation test: 40 C at 15 V, transfer test: 30 C at 6.5 V,
+   exfoliation test: 40 C at 20 V, transfer test: 40 C at 15 V (per-heater `probe_max_volts`),
    with a mandatory timeout):
 
    ```bat
    scripts\probe.bat switch exfoliation_vacuum on
    scripts\probe.bat jog arm_left z 0.5
-   scripts\probe.bat heat exfoliation_heater 40 --timeout 300 --volts 15
+   scripts\probe.bat heat exfoliation_heater 40 --timeout 300 --volts 20
    scripts\probe.bat l2             :: guided walk through both modules
    ```
 

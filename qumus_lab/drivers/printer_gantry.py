@@ -7,7 +7,10 @@ The apply/peel geometry (arc centre, end point, approach X) is in config/points.
 
 Changed on purpose: v1 sent ``M17 X Y Z`` on connect; here connect sends only ``M114``.
 The first explicit motion enables the motors, and acknowledged commands use v1's 50 ms pause.
-Stop sends ``M410`` (Marlin quick stop; not used by v1, confirm at L2).
+Stop sends ``M410`` (Marlin quick stop; not used by v1) ONLY while a move may still be running, i.e. a motion
+G-code was sent and its ``M400`` has not been acknowledged. An idle gantry gets no ``M410``: on the bench
+(2026-11-13), after an ``M410`` the Prusa kept acknowledging moves and reporting the new coordinates but its
+motors did not turn, and a reconnect reported the old position again, until the Prusa was restarted.
 """
 
 from __future__ import annotations
@@ -61,6 +64,10 @@ class PrinterGantry(Device):
         self.pos: dict[str, float | None] = {"x": None, "y": None, "z": None}
         self.motors_on: bool | None = None
         self.busy = False
+        #: a motion G-code was sent and no M400 has confirmed it finished -> a stop must send M410
+        self.motion_pending = False
+        #: M410 was sent on this connection; later moves may be ignored until the Prusa is restarted
+        self.quick_stopped = False
 
     def connect(self) -> None:
         with self._lock:
@@ -68,6 +75,8 @@ class PrinterGantry(Device):
             time.sleep(float(self.cfg.get("open_settle_s", 2.0)))
             self.ser.reset_input_buffer()
             self.motors_on = None
+            self.motion_pending = False
+            self.quick_stopped = False
             self.connected = True
             self.read()
 
@@ -85,6 +94,7 @@ class PrinterGantry(Device):
                 if self.motors_on is not True:
                     self.power(True)  # v1 enabled at connect; here only an explicit move may energise motors
                     self.check_not_stopped()
+                self.motion_pending = True  # set before writing: a stop racing this write must still brake
             self.ser.reset_input_buffer()
             self.ser.write((cmd + "\n").encode())
             deadline = time.monotonic() + (timeout_s or self.reply_timeout_s)
@@ -150,6 +160,7 @@ class PrinterGantry(Device):
 
     def finish(self, timeout_s: float = 120.0) -> None:
         self.send("M400", timeout_s=timeout_s)
+        self.motion_pending = False  # M400 acknowledged: every queued move has finished
 
     def set_relative(self, relative: bool) -> None:
         """G91 (relative) or G90 (absolute)."""
@@ -194,10 +205,15 @@ class PrinterGantry(Device):
     def stop(self) -> bool | None:
         if not self.connected:
             return None
-        self._stop_evt.set()
+        self._stop_evt.set()  # no further motion G-code is sent until the next command clears it
+        if not self.motion_pending:
+            return None  # idle: nothing to stop, and M410 would leave the Prusa ignoring later moves
         try:
             for line in self.stop_gcode:
                 self.ser.write((line + "\n").encode())
+            self.quick_stopped = True
+            self.last_error = (f"{self.id}: quick stop ({' '.join(self.stop_gcode)}) sent during motion; "
+                               "restart the Prusa before moving the gantry again")
             return True
         except Exception as exc:
             self.last_error = str(exc)

@@ -103,25 +103,49 @@ def test_invalid_arm_z_cap_is_refused(cfg, cap):
         gate.check_jog("arm", "arm_left", "z", 0.5)
 
 
-@pytest.mark.parametrize("first_sign", [-1, 1])
-def test_gantry_moves_configured_direction_then_back_to_start(cfg, first_sign):
-    cfg.limits["probe"]["gantry_first_sign"] = first_sign
+def test_gantry_l2_is_x_minus_then_plus_then_z_plus_then_minus(cfg):
+    p, out = _probe(cfg)
+    steps = [step for _, _, step in p.l2_plan() if step["device"] == "tape_gantry"]
+    assert [(step["axis"], step["mm"]) for step in steps] == [("x", -10.0), ("x", 10.0), ("z", 5.0), ("z", -5.0)]
+    p.close()
+
+
+@pytest.mark.parametrize("axis,first_sign", [("x", -1), ("x", 1), ("z", -1), ("z", 1)])
+def test_gantry_moves_configured_direction_then_back_to_start(cfg, axis, first_sign):
+    cfg.limits["probe"][f"gantry_{axis}_first_sign"] = first_sign
+    other = "z" if axis == "x" else "x"
     p, out = _probe(cfg)
     try:
-        steps = [step for _, _, step in p.l2_plan() if step["device"] == "tape_gantry"]
-        assert [step["mm"] for step in steps] == [first_sign * 10.0, -first_sign * 10.0]
-        assert all(step["axis"] == "x" for step in steps)
+        steps = [step for _, _, step in p.l2_plan() if step["device"] == "tape_gantry" and step["axis"] == axis]
+        distance = 10.0 if axis == "x" else 5.0
+        assert [step["mm"] for step in steps] == [first_sign * distance, -first_sign * distance]
         assert p.connect("tape_gantry")
         gantry = p.stack.lab.devices["tape_gantry"]
         start = gantry.read()
         for index, step in enumerate(steps):
-            result = p.jog("tape_gantry", "x", step["mm"], confirm=False)
+            result = p.jog("tape_gantry", axis, step["mm"], confirm=False)
             assert result["result"] == "ok"
-            expected = start["x_mm"] + first_sign * 10.0 if index == 0 else start["x_mm"]
-            assert result["output"]["x_mm"] == pytest.approx(expected)
-            assert result["output"]["z_mm"] == start["z_mm"]
+            expected = start[f"{axis}_mm"] + first_sign * distance if index == 0 else start[f"{axis}_mm"]
+            assert result["output"][f"{axis}_mm"] == pytest.approx(expected)
+            assert result["output"][f"{other}_mm"] == start[f"{other}_mm"]
     finally:
         p.close()
+
+
+def test_l2_order_is_cameras_switches_motion_heater_per_module(cfg):
+    p, out = _probe(cfg)
+    plan = p.l2_plan()
+    p.close()
+    phase = {"capture": 0, "switch": 1, "jog": 2, "heat": 3}
+    modules = [module for module, _, _ in plan]
+    assert modules == sorted(modules, key=["exfoliation", "stacking"].index)  # exfoliation first
+    for module in ("exfoliation", "stacking"):
+        kinds = [phase[step["kind"]] for m, _, step in plan if m == module]
+        assert kinds == sorted(kinds), module
+    jogs = [step for _, _, step in plan if step["kind"] == "jog"]
+    for out_step, back_step in zip(jogs[::2], jogs[1::2]):  # every move is directly followed by its return
+        assert (out_step["device"], out_step["axis"]) == (back_step["device"], back_step["axis"])
+        assert out_step["mm"] == -back_step["mm"]
 
 
 @pytest.mark.parametrize("axis,amount", [("x", 10.1), ("z", 10.1), ("z", -10.1)])
@@ -171,17 +195,19 @@ def test_cli_ports_runs_in_demo(cfg, capsys):
 
 def test_l2_walk_stops_at_a_lock(cfg):
     p, out = _probe(cfg)
-    p.stack.lab.backends.world.by_device["exfoliation_vacuum"].reply = False  # first step: relay goes silent
+    p.stack.lab.backends.world.by_device["exfoliation_vacuum"].reply = False  # first switch: relay goes silent
     try:
         done = p.l2(confirm=False)
     finally:
         p.close()
-    assert len(done) == 1 and done[0]["result"] == "failed"
+    assert [(d["device"], d["result"]) for d in done] == [("desk_camera_left", "ok"), ("exfoliation_vacuum", "failed")]
     assert any("L2 walk stopped" in line for line in out)
 
 
 def _two_device_plan(p, first="tape_gantry", second="arm_right"):
-    return [entry for entry in p.l2_plan() if entry[2]["device"] in (first, second)]
+    """The first device's X pair (out and back) followed by the second device's tests."""
+    return [entry for entry in p.l2_plan()
+            if (entry[2]["device"] == first and entry[2].get("axis") == "x") or entry[2]["device"] == second]
 
 
 def test_l2_problem_skips_device_return_and_continues_other_devices(cfg, monkeypatch):
@@ -191,7 +217,7 @@ def test_l2_problem_skips_device_return_and_continues_other_devices(cfg, monkeyp
     try:
         done = p.l2()
         assert [r["result"] for r in done] == ["not_as_expected", "skipped", "ok", "ok"]
-        assert p.stack.lab.devices["tape_gantry"].read()["x_mm"] == 10.0  # return was not sent
+        assert p.stack.lab.devices["tape_gantry"].read()["x_mm"] == -10.0  # return was not sent
         report = json.loads(next(p.log.dir.glob("*-l2-report.json")).read_text(encoding="utf-8"))
         assert report["steps"][0]["command_result"] == "ok"
         assert report["steps"][0]["observed"] == "NOT as expected"
@@ -369,17 +395,17 @@ def test_larger_focus_stamp_z_tests_still_enforce_caps(cfg, kind, device, amount
         gate.check_jog(kind, device, "z", amount)
 
 
-def test_exfoliation_l2_uses_15v_without_raising_transfer_voltage(cfg):
+@pytest.mark.parametrize("device,module,volts", [("exfoliation_heater", "exfoliation", 20.0),
+                                                 ("transfer_heater", "stacking", 15.0)])
+def test_l2_heats_40c_at_their_voltage_and_caps_hold(cfg, device, module, volts):
     probe = object.__new__(Probe)
     probe.config = cfg
     steps = {step["device"]: step for _, _, step in probe.l2_plan() if step["kind"] == "heat"}
-    gate = SafetyGate(cfg, "exfoliation", demo=False)
-    step = steps["exfoliation_heater"]
-    assert (step["target_c"], step["volts"], step["timeout_s"]) == (40, 15.0, 300)
-    assert gate.check_heat(None, "exfoliation_heater", 40, 300, 15) == {"mode": "until", "volts": 15.0}
+    gate = SafetyGate(cfg, module, demo=False)
+    step = steps[device]
+    assert (step["target_c"], step["volts"], step["timeout_s"]) == (40, volts, 300)
+    assert gate.check_heat(None, device, 40, 300, volts) == {"mode": "until", "volts": volts}
     with pytest.raises(Rejected):
-        gate.check_heat(None, "exfoliation_heater", 40, 300, 15.1)
-    transfer_gate = SafetyGate(cfg, "stacking", demo=False)
-    assert steps["transfer_heater"]["volts"] == 6.5
+        gate.check_heat(None, device, 40, 300, volts + 0.1)
     with pytest.raises(Rejected):
-        transfer_gate.check_heat(None, "transfer_heater", 30, 300, 15)
+        gate.check_heat(None, device, 40.5, 300, volts)  # first heats stay capped at 40 C

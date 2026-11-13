@@ -273,49 +273,66 @@ class Probe:
         self.log.write("heat_result", device=device_id, result=result["result"], message=result["message"], output=final)
         return result
 
+    # L2 heat tests (operator request 2026-11-13). Each must stay within the heater's probe_max_volts
+    # and first_heat_max_c in config/limits.yaml, or the SafetyGate refuses it.
+    L2_HEATS = {"exfoliation_heater": (40, 20.0, 300), "transfer_heater": (40, 15.0, 300)}
+
     def l2_plan(self) -> list[tuple[str, str, dict]]:
-        """One actuator at a time, with configured arm/gantry Z travel. Left side first."""
-        left_z = float(self.config.limits.get("arms", {}).get("arm_left", {}).get("probe_z_jog_max_mm", 0.5))
-        right_z = float(self.config.limits.get("arms", {}).get("arm_right", {}).get("probe_z_jog_max_mm", 0.5))
-        probe_limits = self.config.limits.get("probe", {})
-        gantry_axis = probe_limits.get("gantry_l2_axis", "z")
-        if gantry_axis not in ("x", "z"):
-            raise ValueError("gantry_l2_axis must be x or z")
-        gantry_distance = float(probe_limits.get(f"gantry_{gantry_axis}_jog_max_mm", 0.5))
-        gantry_sign = float(probe_limits.get("gantry_first_sign", probe_limits.get("gantry_z_first_sign", -1)))
-        if gantry_sign not in (-1, 1):
-            raise ValueError("gantry_first_sign must be +1 or -1")
-        gantry_first = gantry_sign * gantry_distance
-        stamp_z = float(self.config.limits.get("probe", {}).get("stamp_z_jog_max_mm", 0.1))
-        stamp_sign = float(probe_limits.get("stamp_z_first_sign", 1))
-        if stamp_sign not in (-1, 1):
-            raise ValueError("stamp_z_first_sign must be +1 or -1")
-        stamp_first = stamp_sign * stamp_z
-        focus_um = float(self.config.limits.get("probe", {}).get("focus_l2_step_um", 20))
-        focus_mm = focus_um / 1000.0
+        """One actuator at a time. Exfoliation module first, then stacking; inside each module the same order:
+        1. cameras (so the views used to watch later tests are known to work),
+        2. switches (auto-off),
+        3. motion, one device and one axis at a time; every move is followed by the move back to the start,
+        4. heater last (slowest, and leaves a warm stage).
+        """
+        lim = self.config.limits
+        probe_limits = lim.get("probe", {})
+
+        def sign(key: str, default: int) -> float:
+            value = float(probe_limits.get(key, default))
+            if value not in (-1, 1):
+                raise ValueError(f"{key} must be +1 or -1")
+            return value
+
+        def move_and_back(module, label, device, axis, first_mm, note="", unit="mm", scale=1.0):
+            first = f"jog {label} {axis} {first_mm * scale:+g} {unit}{f' ({note})' if note else ''}"
+            back = f"jog {label} {axis} {-first_mm * scale:+g} {unit} (back to start)"
+            return [(module, first, {"kind": "jog", "device": device, "axis": axis, "mm": first_mm}),
+                    (module, back, {"kind": "jog", "device": device, "axis": axis, "mm": -first_mm})]
+
+        def heat(module, label, device):
+            target_c, volts, timeout_s = self.L2_HEATS[device]
+            return [(module, f"heat {label} to {target_c:g} C ({volts:g} V, {timeout_s:g} s)",
+                     {"kind": "heat", "device": device, "target_c": target_c, "timeout_s": timeout_s, "volts": volts})]
+
+        arms = lim.get("arms", {})
+        left_z = float(arms.get("arm_left", {}).get("probe_z_jog_max_mm", 0.5))
+        right_z = float(arms.get("arm_right", {}).get("probe_z_jog_max_mm", 0.5))
+        gantry_x = sign("gantry_x_first_sign", -1) * float(probe_limits.get("gantry_x_jog_max_mm", 0.5))
+        gantry_z = sign("gantry_z_first_sign", 1) * float(probe_limits.get("gantry_z_l2_mm", 0.5))
+        stamp_z = sign("stamp_z_first_sign", 1) * float(probe_limits.get("stamp_z_jog_max_mm", 0.1))
+        focus_mm = float(probe_limits.get("focus_l2_step_um", 20)) / 1000.0
+
+        ex, st = "exfoliation", "stacking"
         return [
-            ("exfoliation", "switch exfoliation vacuum on (auto-off)", {"kind": "switch", "device": "exfoliation_vacuum"}),
-            ("exfoliation", "switch exfoliation fan on (auto-off)", {"kind": "switch", "device": "exfoliation_fan"}),
-            ("exfoliation", f"jog left arm z +{left_z:g} mm", {"kind": "jog", "device": "arm_left", "axis": "z", "mm": left_z}),
-            ("exfoliation", f"jog left arm z -{left_z:g} mm (back)", {"kind": "jog", "device": "arm_left", "axis": "z", "mm": -left_z}),
-            ("exfoliation", f"jog tape gantry {gantry_axis} {gantry_first:+g} mm (verify physical direction)", {"kind": "jog", "device": "tape_gantry", "axis": gantry_axis, "mm": gantry_first}),
-            ("exfoliation", f"jog tape gantry {gantry_axis} {-gantry_first:+g} mm (back)", {"kind": "jog", "device": "tape_gantry", "axis": gantry_axis, "mm": -gantry_first}),
-            ("exfoliation", "capture left desk camera", {"kind": "capture", "device": "desk_camera_left"}),
-            ("exfoliation", "heat exfoliation stage to 40 C (15 V, 300 s)", {"kind": "heat", "device": "exfoliation_heater",
-                                                                             "target_c": 40, "timeout_s": 300, "volts": 15.0}),
-            ("stacking", "switch sample-stage vacuum on (auto-off)", {"kind": "switch", "device": "stage_vacuum"}),
-            ("stacking", f"jog right arm z +{right_z:g} mm", {"kind": "jog", "device": "arm_right", "axis": "z", "mm": right_z}),
-            ("stacking", f"jog right arm z -{right_z:g} mm (back)", {"kind": "jog", "device": "arm_right", "axis": "z", "mm": -right_z}),
-            ("stacking", "jog sample stage x +0.5 mm", {"kind": "jog", "device": "sample_stage", "axis": "x", "mm": 0.5}),
-            ("stacking", "jog sample stage x -0.5 mm (back)", {"kind": "jog", "device": "sample_stage", "axis": "x", "mm": -0.5}),
-            ("stacking", f"jog stamp z {stamp_first:+g} mm (verify physical direction)", {"kind": "jog", "device": "stamp", "axis": "z", "mm": stamp_first}),
-            ("stacking", f"jog stamp z {-stamp_first:+g} mm (back)", {"kind": "jog", "device": "stamp", "axis": "z", "mm": -stamp_first}),
-            ("stacking", f"jog focus -{focus_mm:g} mm ({focus_um:g} um, down first)", {"kind": "jog", "device": "focus", "axis": "z", "mm": -focus_mm}),
-            ("stacking", f"jog focus +{focus_mm:g} mm (up, back)", {"kind": "jog", "device": "focus", "axis": "z", "mm": focus_mm}),
-            ("stacking", "capture microscope camera", {"kind": "capture", "device": "microscope_camera"}),
-            ("stacking", "capture right desk camera", {"kind": "capture", "device": "desk_camera_right"}),
-            ("stacking", "heat transfer stage to 30 C (6.5 V, 300 s)", {"kind": "heat", "device": "transfer_heater",
-                                                                       "target_c": 30, "timeout_s": 300, "volts": 6.5}),
+            # exfoliation: cameras -> switches -> motion -> heater
+            (ex, "capture left desk camera", {"kind": "capture", "device": "desk_camera_left"}),
+            (ex, "switch exfoliation vacuum on (auto-off)", {"kind": "switch", "device": "exfoliation_vacuum"}),
+            (ex, "switch exfoliation fan on (auto-off)", {"kind": "switch", "device": "exfoliation_fan"}),
+            *move_and_back(ex, "left arm", "arm_left", "z", left_z),
+            *move_and_back(ex, "tape gantry", "tape_gantry", "x", gantry_x, "note which way is X-"),
+            *move_and_back(ex, "tape gantry", "tape_gantry", "z", gantry_z,
+                           "note which way is Z+ (up or down); check clearance both ways"),
+            *heat(ex, "exfoliation stage", "exfoliation_heater"),
+            # stacking: cameras -> switches -> motion -> heater
+            (st, "capture right desk camera", {"kind": "capture", "device": "desk_camera_right"}),
+            (st, "capture microscope camera", {"kind": "capture", "device": "microscope_camera"}),
+            (st, "switch sample-stage vacuum on (auto-off)", {"kind": "switch", "device": "stage_vacuum"}),
+            *move_and_back(st, "right arm", "arm_right", "z", right_z),
+            *move_and_back(st, "sample stage", "sample_stage", "x", 0.5),
+            *move_and_back(st, "stamp", "stamp", "z", stamp_z, "verify physical direction"),
+            *move_and_back(st, "focus", "focus", "z", -focus_mm, "down first, with before/after images",
+                           unit="um", scale=1000.0),
+            *heat(st, "transfer stage", "transfer_heater"),
         ]
 
     def _l2_step(self, step: dict, confirm: bool) -> dict:
@@ -358,12 +375,14 @@ class Probe:
         done = []
         skipped_devices = {}
         stopped_reason = None
+        plan = [entry for entry in self.l2_plan() if entry[0] in self.stack.services]
+        totals = {m: sum(1 for entry in plan if entry[0] == m) for m, _, _ in plan}
+        numbers: dict[str, int] = {}
         try:
-            for module, text, step in self.l2_plan():
-                if module not in self.stack.services:
-                    continue
+            for module, text, step in plan:
+                numbers[module] = numbers.get(module, 0) + 1
                 dev = step["device"]
-                self.out(f"\n[{module}] {text}")
+                self.out(f"\n[{module} {numbers[module]}/{totals[module]}] {text}")
                 record = {"step": text, "device": dev}
                 if dev in skipped_devices:
                     record.update(result="skipped", message=skipped_devices[dev])
