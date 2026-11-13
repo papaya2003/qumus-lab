@@ -139,7 +139,7 @@ class JobRunner:
                                       requested_by=requested_by, meta={"module": self.svc.name})
         job = _Job(run_id, action.name, params, client, project_id, action.fn, gctx)
         self.queue.append(job)
-        if self._thread is None or not self._thread.is_alive():
+        if self._thread is None:
             self._thread = threading.Thread(target=self._loop, daemon=True, name=f"jobs-{self.svc.name}")
             self._thread.start()
         return {"run_id": run_id, "flow": action.name, "queued_behind": len(self.queue) - 1 + (1 if self.current else 0)}
@@ -172,6 +172,20 @@ class JobRunner:
     def running_run(self) -> str | None:
         return self.current.run_id if self.current else None
 
+    def _heaters_off(self, job: _Job, status: str) -> None:
+        """A job that did not succeed leaves no heater of its module heating. Flows such as stack_device heat
+        for a long time (2 h timeout, 27 V boost in drop_down); after a failure, a stop or a cancel nobody is
+        following that heat any more. An off that can not be confirmed locks the module."""
+        svc = self.svc
+        for dev in svc.module.devices.values():
+            if dev.kind != "heater" or not dev.connected or not getattr(dev, "heating", False):
+                continue
+            try:
+                dev.off(f"job {job.run_id} ({job.flow}) {status}")
+                svc.emit("job.heater_off", {"run_id": job.run_id, "device": dev.id, "status": status}, "warning")
+            except Exception as exc:  # noqa: BLE001 - keep switching the others off
+                svc._lock_service("heat_off_unconfirmed", f"{dev.id}: {type(exc).__name__}: {exc}", job.run_id)
+
     def _end(self, run_id: str, status: str, result: Any, error: Any) -> None:
         if self.svc.store is not None:
             self.svc.store.update_run(run_id, status=status, result=_jsonable(result), error=_jsonable(error))
@@ -181,12 +195,17 @@ class JobRunner:
         while True:
             with self.svc.lock:
                 if not self.queue:
+                    # Forget this worker under the lock: a job submitted after we release it must start a new
+                    # worker. Checking is_alive() there missed this thread while it was still finishing, and the
+                    # new job then stayed queued with no worker.
                     self.current = None
+                    self._thread = None
                     return
                 if self.svc.locked:  # queued jobs never start by themselves on a locked module
                     while self.queue:
                         self._end(self.queue.popleft().run_id, "cancelled", None, {"reason": "module locked"})
                     self.current = None
+                    self._thread = None
                     return
                 job = None
                 if self.svc.busy_command is None:
@@ -236,6 +255,8 @@ class JobRunner:
             svc._lock_service("internal_error", error["message"], job.run_id)
         if status == "succeeded" and svc._cancel.is_set():
             status, error, level = "cancelled", {"reason": "stop requested during the job"}, "warning"
+        if status != "succeeded":
+            self._heaters_off(job, status)
         svc.record_devices(list(svc.module.devices))
         self._end(job.run_id, status, result, error)
         ctx.event(f"job.{status}", {"flow": job.flow, "error": error}, level)

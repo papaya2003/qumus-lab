@@ -35,8 +35,11 @@ STATION = "transfer_stage"
 HOLDER = "stamp_holder"
 
 # right arm (robot_arm_controller.py:225-240, 315-345)
-RIGHT_PICK_Z = 15.0         # :230 "G0 Z15 F5000" (board slots are placed at Z14, :342)
-SLOT_SAFE_Z = 30.0          # :229
+# v1 picks a chip from a board slot 1 mm above the height it places it at (:230 "G0 Z15", :342 "G0 Z14").
+# The pick height is the slot point's z + this offset, so a measured slot z moves the pick with it (it used to
+# be a fixed Z15, which ignored the measured z).
+RIGHT_PICK_ABOVE_SLOT_MM = 1.0
+SLOT_SAFE_Z = 30.0          # :229; used only when a slot point has no approach_z
 STAMP_NOZZLE_DEG = 50.0     # :275 rotate_nose(angle_deg=50)
 # v1 pixel targets on the 3840 x 2160 frame
 ADJUST_TARGET_PT = (1920, 1080)   # molecule_adjust_touching_point.py:94
@@ -192,6 +195,12 @@ def _stamp_sample(ctx) -> dict | None:
 
 
 # ------------------------------------------------------------------------------------------- chips
+def _slot_safe_z(pt: dict) -> float:
+    """Travel height over a board slot: the slot point's approach_z (v1 Z30), else SLOT_SAFE_Z."""
+    az = pt.get("approach_z")
+    return float(az) if az is not None else SLOT_SAFE_Z
+
+
 def place_chip_on_transfer_stage(ctx: ActionContext, p: dict) -> dict:
     """v1 place_silicon_chip_on_transfer_stage (robot_arm_controller.py:225-240) with the stage at load
     (stage_atoms.py:134) and the stage vacuum on, then the stage to the microscope (stage_atoms.py:151)."""
@@ -199,11 +208,12 @@ def place_chip_on_transfer_stage(ctx: ActionContext, p: dict) -> dict:
     if _on(ctx, STATION) is not None:
         raise Rejected(f"the ledger already has {_on(ctx, STATION)['id']} on the transfer stage")
     name, pt = c.place_point(ctx, place, ARM)
+    safe_z = _slot_safe_z(pt)
     _device_point(ctx, STAGE, "load")
-    c.move_point(ctx, ARM, name, z=SLOT_SAFE_Z)                      # G0 X Y Z30 F5000
-    c.move_point(ctx, ARM, name, z=RIGHT_PICK_Z)                     # G0 Z15 F5000
+    c.move_point(ctx, ARM, name, z=safe_z)                           # G0 X Y Z30 F5000
+    c.move_point(ctx, ARM, name, z=float(pt["xyz"][2]) + RIGHT_PICK_ABOVE_SLOT_MM)  # G0 Z15 F5000
     c.pick_item(ctx, ARM)
-    c.move_point(ctx, ARM, name, z=SLOT_SAFE_Z)                      # G0 Z30 F5000
+    c.move_point(ctx, ARM, name, z=safe_z)                           # G0 Z30 F5000
     c.park(ctx, ARM)                                                 # home_to_search_stage
     c.rotate(ctx, ARM, float(p.get("angle_deg") or 0.0))
     c.move_point(ctx, ARM, "stage_chip_place")                       # G0 X{sx-10} Y{sy} Z132 F5000
@@ -232,11 +242,12 @@ def store_chip(ctx: ActionContext, p: dict) -> dict:
     c.move_point(ctx, ARM, "stage_chip_pick", feed=c.SLOW_F)                 # G0 Z130 F1000
     c.pick_item(ctx, ARM)
     c.park(ctx, ARM)
-    c.move_point(ctx, ARM, name, z=SLOT_SAFE_Z)                              # G0 X Y Z30 F5000
+    safe_z = _slot_safe_z(ctx.gate.check_point(ARM, name))
+    c.move_point(ctx, ARM, name, z=safe_z)                                   # G0 X Y Z30 F5000
     c.rotate(ctx, ARM, -angle)
     c.move_point(ctx, ARM, name)                                             # G0 Z14 F5000
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, name, z=SLOT_SAFE_Z)
+    c.move_point(ctx, ARM, name, z=safe_z)
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, STATION, place, sample_id=p.get("sample_id"))
     return {"chip": sid, "from": STATION, "to": place, "nozzle_deg": round(-angle, 3)}
@@ -440,23 +451,28 @@ def drop_down(ctx: ActionContext, p: dict) -> dict:
     set_objective(ctx, 5)
     autofocus(ctx)
     _start_heat(ctx, MELT_TEMP_C, auto_hold=False)   # 27 V until this op has seen > 170 C (v1)
+    try:
+        def reached(limit):
+            def f():
+                autofocus(ctx, 0.0)
+                t = _temp(ctx)
+                return t >= limit and t
+            return f
 
-    def reached(limit):
-        def f():
-            autofocus(ctx, 0.0)
-            t = _temp(ctx)
-            return t >= limit and t
-        return f
-
-    t1 = c.wait_until(ctx, reached(DROP_DOWN_TEMP_C), 3600, poll_s=TEMP_CHECK_PERIOD_S,
-                      what=f"transfer stage >= {DROP_DOWN_TEMP_C} C")
-    _stamp_to(ctx, "z", DROP_DOWN_Z)
-    snap(ctx, "drop_contact")
-    t2 = c.wait_until(ctx, lambda: _temp(ctx) > MELT_TEMP_C and _temp(ctx), 3600, poll_s=TEMP_CHECK_PERIOD_S,
-                      what=f"transfer stage > {MELT_TEMP_C} C")
-    _heater(ctx).hold_now()                                   # heater_set(voltage=HOLD_VOLTAGE) 16 V
-    _speed(ctx, "z", 0.1, 1.0)
-    _stamp_by(ctx, "z", MELT_LIFT_DELTA_Z)
+        t1 = c.wait_until(ctx, reached(DROP_DOWN_TEMP_C), 3600, poll_s=TEMP_CHECK_PERIOD_S,
+                          what=f"transfer stage >= {DROP_DOWN_TEMP_C} C")
+        _stamp_to(ctx, "z", DROP_DOWN_Z)
+        snap(ctx, "drop_contact")
+        t2 = c.wait_until(ctx, lambda: _temp(ctx) > MELT_TEMP_C and _temp(ctx), 3600, poll_s=TEMP_CHECK_PERIOD_S,
+                          what=f"transfer stage > {MELT_TEMP_C} C")
+        _heater(ctx).hold_now()                               # heater_set(voltage=HOLD_VOLTAGE) 16 V
+        _speed(ctx, "z", 0.1, 1.0)
+        _stamp_by(ctx, "z", MELT_LIFT_DELTA_Z)
+    except BaseException as exc:
+        # Timeout, stop, a failed stamp move: never leave the heater at the 27 V boost (auto_hold off) for the
+        # rest of its 2 h timeout. An off that can not be confirmed raises OutcomeUnknown and locks the module.
+        _heater(ctx).off(f"drop_down did not finish: {type(exc).__name__}")
+        raise
     _heater(ctx).off("drop_down finished")
     return {"drop_temp_c": t1, "melt_temp_c": t2}
 

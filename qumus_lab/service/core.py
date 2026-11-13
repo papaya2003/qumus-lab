@@ -326,9 +326,14 @@ class ContractService:
     # ------------------------------------------------------------------ stop / unlock
     def stop(self, wait_s: float = 0.0, reason: str = "api_stop", heat_off: bool = False) -> dict:
         """Any client, no lease, idempotent. Stops motion; ``heat_off`` [Q] also switches heaters off."""
-        wait_s = min(max(float(wait_s or 0.0), 0.0), 15.0)
-        self._cancel.set()
+        try:
+            wait_s = min(max(float(wait_s or 0.0), 0.0), 15.0)
+        except (TypeError, ValueError):
+            wait_s = 0.0  # a malformed wait never prevents the stop itself
+        # Cancel and drop the queue under one lock: the job worker clears _cancel and pops the next job under
+        # the same lock, so a queued job can not start between the cancel and the drop.
         with self.lock:
+            self._cancel.set()
             dropped = self.jobs.on_stop_locked(reason)
         unconfirmed = []
         for dev in self.module.motion_devices():

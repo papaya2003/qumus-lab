@@ -64,10 +64,15 @@ def advance_tape(ctx: ActionContext, p: dict) -> dict:
         cap = float(ctx.gate.probe.get("reel_jog_max_deg", 10))
         if deg > cap:
             raise Rejected(f"reel angle {deg} deg above the probe cap {cap} deg until the reels are measured")
+    ctx.check()
     dev.power(1, True)
     dev.power(2, False)
-    dev.rotate(1, False, deg)
-    dev.power(2, True)
+    try:
+        dev.rotate(1, False, deg)
+    finally:
+        # Reel 2 holds the tape tension: power it again even when the rotation was stopped or failed, so
+        # the next apply_tape / peel_tape does not run on slack tape.
+        dev.power(2, True)
     return dev.snapshot()
 
 
