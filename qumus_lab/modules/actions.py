@@ -103,7 +103,7 @@ def _prepare_go_to_point(ctx: ActionContext, p: dict):
     dev = ctx.device(dev_id)
     if dev.kind == "arm":
         x, y, z = (float(v) for v in pt["xyz"])
-        feed = ctx.gate.arm_feed(dev_id)
+        feed = ctx.gate.debug_feed(dev_id, "arm", ctx.gate.arm_feed(dev_id))
         ctx.gate.check_arm_z(dev_id, z)
         az = float(pt["approach_z"]) if pt.get("approach_z") is not None else None
         if az is not None:
@@ -137,7 +137,7 @@ def jog(ctx: ActionContext, p: dict) -> dict:
     axis, mm = p["axis"], float(p["mm"])
     amount = mm * 1000.0 if dev.kind == "focus" else mm
     ctx.gate.check_jog(dev.kind, dev.id, axis, amount)
-    feed = float(ctx.gate.probe.get("jog_feed_mm_min", 300))
+    feed = ctx.gate.debug_feed(dev.id, dev.kind, float(ctx.gate.probe.get("jog_feed_mm_min", 300)))
     if dev.kind == "arm":
         if axis not in ("x", "y", "z"):
             raise Rejected("arm axis must be x, y or z")
@@ -202,7 +202,7 @@ def move_axis(ctx: ActionContext, p: dict) -> dict:
     cur = _current(dev, axis)
     ctx.gate.check_target_move(dev.kind, dev.id, axis, cur, target)
     ctx.check()
-    feed = float(ctx.gate.probe.get("jog_feed_mm_min", 300))
+    feed = ctx.gate.debug_feed(dev.id, dev.kind, float(ctx.gate.probe.get("jog_feed_mm_min", 300)))
     if dev.kind == "arm":
         if axis == "z":
             ctx.gate.check_arm_z(dev.id, target)

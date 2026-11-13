@@ -133,7 +133,8 @@ class ContractService:
     def describe(self) -> dict:
         return {
             "service": f"qumus-lab.{self.name}", "version": self.version, "contract": CONTRACT, "module": self.name,
-            "demo": self.module.demo, "client_header": CLIENT_HEADER, "lease_seconds": self.lease_s,
+            "demo": self.module.demo, "dev_mode": self.module.gate.dev_mode,
+            "client_header": CLIENT_HEADER, "lease_seconds": self.lease_s,
             "on_lease_expiry": "stop_motion (heaters keep their own timeout and orphan timeout)",
             "zones": self.module.zone_names(), "devices": self.module.describe_devices(),
             "commands": {n: a.describe() for n, a in self.module.actions.items()},
@@ -155,7 +156,8 @@ class ContractService:
         with self.lock:
             return {
                 "service": f"qumus-lab.{self.name}", "seq": self.seq, "ts_unix": round(time.time(), 3),
-                "demo": self.module.demo, "connected": all(d.connected for d in self.module.devices.values()),
+                "demo": self.module.demo, "dev_mode": self.module.gate.dev_mode,
+                "connected": all(d.connected for d in self.module.devices.values()),
                 "busy": self.busy_command is not None, "busy_action": (self.busy_command or {}).get("action"),
                 "locked": self.locked, "fault": self.fault, "lease": self.lease_view(),
                 "last_command": self.last_command, "devices": devices,

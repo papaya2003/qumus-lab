@@ -63,6 +63,7 @@ input[type="number"] { width: 5.2em; }
 }
 .mode { padding: 1px 8px; border-radius: 3px; border: 1px solid var(--line); font-weight: 600; }
 .mode.demo { color: var(--oxide); border-color: var(--oxide); }
+.mode.devmode { color: var(--oxide); border-color: var(--oxide); border-style: dashed; }
 .mode.real { color: #fff; background: var(--fault); border-color: var(--fault); }
 .control { display: flex; align-items: center; gap: 12px; margin-left: auto; flex-wrap: wrap; }
 .take { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; cursor: pointer; }

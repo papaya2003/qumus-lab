@@ -6,6 +6,7 @@ const MODULE_TITLES = { exfoliation: "Exfoliation (left)", stacking: "Stacking (
 const modules = {};   // name -> {describe, state, el, nav, evNext}
 const events = [];
 let control = false;
+let devMode = false;  // limits.yaml dev_mode: speed caps off (the service still checks ranges, heat, zones)
 let current = null;   // module shown in the main area
 const HOLD_DELAY_MS = 350;   // a press longer than this keeps stepping
 const HOLD_MAX_STEPS = 20;   // a hold stops by itself after this many steps (e.g. a lost mouse-up over remote desktop)
@@ -86,6 +87,11 @@ const JOG = {
   manipulator: { axes: ["x", "y", "z", "rail"], steps: [0.01, 0.05, 0.1] },
   gantry: { axes: ["x", "z"], steps: [0.1, 0.5] },
   focus: { axes: ["z"], steps: [0.005, 0.02, 0.05] },
+};
+// Development mode: larger jog steps (mm; focus in mm too, shown as um).
+const DEV_STEPS = {
+  arm: [0.1, 0.5, 1, 5, 10], stage: [0.1, 0.5, 1, 5, 10], manipulator: [0.01, 0.1, 0.5, 1],
+  gantry: [0.1, 0.5, 1, 5, 10], focus: [0.005, 0.05, 0.5, 1],
 };
 
 const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
@@ -187,7 +193,7 @@ function buildRow(mod, d) {
 
   const jog = JOG[d.kind];
   if (jog && m.describe.commands.jog) {
-    const step = h("select", { "aria-label": "jog step" }, jog.steps.map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
+    const step = h("select", { "aria-label": "jog step" }, (devMode ? DEV_STEPS[d.kind] : jog.steps).map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
     ctl.append(h("label", { class: "muted" }, "step ", step));
     for (const axis of jog.axes) {
       ctl.append(h("span", { class: "jog" },
@@ -215,16 +221,25 @@ function buildRow(mod, d) {
     for (const mag of [5, 10, 20, 100]) ctl.append(guarded(mod, "set_objective", `${mag}x`, () => ({ objective: mag })));
   }
   if (d.kind === "switch") {
-    const auto = numInput(10, 1, 10, 1, "auto-off seconds");
-    ctl.append(guarded(mod, "set_switch", "On", () => ({ device: d.id, on: true, auto_off_s: Number(auto.value) })),
+    // Development mode: no auto-off cap; leave the box empty to keep the switch on until Off.
+    const auto = devMode ? numInput("", 1, 86400, 1, "auto-off seconds (empty = stays on)") : numInput(10, 1, 10, 1, "auto-off seconds");
+    ctl.append(guarded(mod, "set_switch", "On", () => (auto.value === "" ? { device: d.id, on: true } : { device: d.id, on: true, auto_off_s: Number(auto.value) })),
                h("label", { class: "muted" }, "auto-off ", auto, " s"),
                guarded(mod, "set_switch", "Off", () => ({ device: d.id, on: false })));
   }
   if (d.kind === "heater") {
-    const t = numInput(30, 1, 40, 1, "target C"), to = numInput(300, 10, 600, 10, "timeout s"), v = numInput(6.5, 0.5, 6.5, 0.5, "volts");
+    // Development mode: no first-heat caps on the page either; the service still refuses targets above the
+    // heater's max_c and timeouts above its max. Empty volts = the heater's own boost/hold voltages.
+    const t = devMode ? numInput(30, 1, 175, 1, "target C") : numInput(30, 1, 40, 1, "target C");
+    const to = devMode ? numInput(300, 10, 7200, 10, "timeout s") : numInput(300, 10, 600, 10, "timeout s");
+    const v = devMode ? numInput("", 0.5, 30, 0.5, "volts (empty = heater's own boost/hold)") : numInput(6.5, 0.5, 6.5, 0.5, "volts");
     ctl.append(h("label", { class: "muted" }, "target ", t, " C"), h("label", { class: "muted" }, "timeout ", to, " s"),
                h("label", { class: "muted" }, "at ", v, " V"),
-               guarded(mod, "heat", "Heat", () => ({ device: d.id, target_c: Number(t.value), timeout_s: Number(to.value), volts: Number(v.value) }), "primary"),
+               guarded(mod, "heat", "Heat", () => {
+                 const p = { device: d.id, target_c: Number(t.value), timeout_s: Number(to.value) };
+                 if (v.value !== "") p.volts = Number(v.value);
+                 return p;
+               }, "primary"),
                guarded(mod, "heat_off", "Heat off", () => ({ device: d.id })));
   }
   if (d.kind === "camera") {
@@ -236,7 +251,7 @@ function buildRow(mod, d) {
     row.append(h("div", { class: "liveview" }, live.figure, last));
   }
   if (d.kind === "tape_reels" && m.describe.commands.advance_tape) {
-    const deg = numInput(5, 1, 10, 1, "degrees");
+    const deg = devMode ? numInput(5, 0.1, 3600, 1, "degrees") : numInput(5, 1, 10, 1, "degrees");
     ctl.append(h("label", { class: "muted" }, "feed tape ", deg, " deg"), guarded(mod, "advance_tape", "Advance", () => ({ deg: Number(deg.value) })));
   }
   if (d.kind === "gantry" && m.describe.commands.apply_tape) {
@@ -301,10 +316,10 @@ function moveTo(mod, d, axes) {
     const cur = st ? st[axisKey(d.kind, axis.value)] : null;
     const t = Number(target.value);
     if (target.value === "" || !Number.isFinite(t)) { flash(mod, "type a target position first", "failed"); return null; }
-    if (!confirm(`Move ${d.id} ${axis.value} from ${fmt(cur)} to ${t} ${unit}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
+    if (!devMode && !confirm(`Move ${d.id} ${axis.value} from ${fmt(cur)} to ${t} ${unit}? Watch the instrument; STOP ALL is at the bottom.`)) return null;
     return { device: d.id, axis: axis.value, target: t };
   });
-  go.dataset.tip = `Move one axis to the typed position${d.kind === "focus" ? " (at most 500 um away)" : d.kind === "manipulator" ? " (stamp x/y at most 1 mm, z 0.1 mm away)" : " (no distance cap; arm z down 0.5 mm until min_z is measured)"}`;
+  go.dataset.tip = devMode ? "Move one axis to the typed position (development mode: no distance cap, axis ranges still apply)" : `Move one axis to the typed position${d.kind === "focus" ? " (at most 500 um away)" : d.kind === "manipulator" ? " (stamp x/y at most 1 mm, z 0.1 mm away)" : " (no distance cap; arm z down 0.5 mm until min_z is measured)"}`;
   return h("span", { class: "moveto" }, h("span", { class: "muted" }, "move "), axis, h("span", { class: "muted" }, " to "), target,
     h("span", { class: "muted" }, ` ${unit} `), go, now);
 }
@@ -514,6 +529,7 @@ async function boot() {
   let anyDemo = false;
   for (const name of list.modules) {
     const d = (await api(name, "GET", "/api/describe")).data;
+    devMode = devMode || Boolean(d.dev_mode);
     const el = $("#tpl-module").content.firstElementChild.cloneNode(true);
     $("h2", el).textContent = MODULE_TITLES[name] || name;
     $(".port", el).textContent = d.service;
@@ -527,7 +543,7 @@ async function boot() {
     go.dataset.action = "go_to_point";
     go.addEventListener("click", () => {
       const p = $(".points", el).value;
-      if (confirm(`Move to ${p}? Watch the instrument; STOP ALL is at the bottom.`)) send(name, "go_to_point", { point: p });
+      if (devMode || confirm(`Move to ${p}? Watch the instrument; STOP ALL is at the bottom.`)) send(name, "go_to_point", { point: p });
     });
     if (!pts.length) $(".goto", el).hidden = true;
     for (const dev of d.devices) $(".devices", el).append(buildRow(name, dev));
@@ -537,6 +553,7 @@ async function boot() {
     bench.append(el);
     anyDemo = anyDemo || d.demo;
   }
+  if (devMode) $("#devmode").hidden = false;
   select(location.hash.slice(1));
   window.addEventListener("hashchange", () => select(location.hash.slice(1)));
   const mode = $("#mode");

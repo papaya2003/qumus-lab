@@ -14,6 +14,13 @@ Rules (contract v1 + brief B):
 - real mode: go_to_point needs a `source: measured` point (v1 numbers are starting guesses only);
   heating a heater whose limits are not measured is capped like the first heat.
 - feeds never above the arm's max feed; axis targets inside their ranges.
+
+Development mode (`dev_mode: true` in limits.yaml, operator decision 2026-11-13): the limits that only slow
+development work are off: jog and typed-target distance caps, the switch auto-off cap, the first-heat caps,
+`require_measured_for_motion`, and the debug page uses `dev_mode_feed_mm_min` instead of the slow jog / travel
+feeds (never above the arm's max feed). Kept in development mode: heater max_c / overshoot cut-off / mandatory
+timeout / orphan timeout, STOP ALL and stop on lease lapse, axis ranges, arm min_z, the stamp z floor of the
+stacking ops, the middle-board zone lock, local-only actions, and the arm's max feed.
 """
 
 from __future__ import annotations
@@ -47,6 +54,7 @@ class SafetyGate:
         self.limits = config.limits
         self.probe = self.limits.get("probe", {})
         self.points = config.points.get("points", {})
+        self.dev_mode = bool(self.limits.get("dev_mode", False))
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -54,7 +62,7 @@ class SafetyGate:
         return not self.demo
 
     def _need_measured(self) -> bool:
-        return self.real and bool(self.limits.get("require_measured_for_motion", True))
+        return self.real and not self.dev_mode and bool(self.limits.get("require_measured_for_motion", True))
 
     def check_local(self, local_only: bool, ctx: GateContext) -> None:
         if local_only and not ctx.loopback:
@@ -84,6 +92,8 @@ class SafetyGate:
         }
         if kind not in caps:
             raise Rejected(f"{device} ({kind}) cannot be jogged")
+        if self.dev_mode:
+            return math.inf
         key, default = caps[kind]
         cap = float(self.probe.get(key, default))
         if kind == "arm" and axis == "z":
@@ -123,6 +133,8 @@ class SafetyGate:
         }
         if kind not in caps:
             raise Rejected(f"{device} ({kind}) cannot be moved to a typed target")
+        if self.dev_mode:
+            return math.inf
         key, default = caps[kind]
         cap = self._target_cap(key, default)
         why = ""
@@ -164,6 +176,17 @@ class SafetyGate:
             raise Rejected(f"feed {f} mm/min outside (0, {max_feed}] for {device}")
         return f
 
+    def debug_feed(self, device: str, kind: str, slow: float) -> float:
+        """Feed for debug-page moves (jog, move_axis, go_to_point). Development mode: dev_mode_feed_mm_min."""
+        if not self.dev_mode:
+            return slow
+        f = float(self.probe.get("dev_mode_feed_mm_min", 3000))
+        if kind == "arm":
+            f = min(f, float(self.limits.get("arms", {}).get(device, {}).get("max_feed_mm_min", 1000)))
+        if not math.isfinite(f) or f <= 0:
+            raise Rejected(f"invalid dev_mode_feed_mm_min: {f}")
+        return f
+
     def check_arm_z(self, device: str, z: float) -> None:
         mz = self.limits.get("arms", {}).get(device, {}).get("min_z_mm")
         if mz is not None and z < float(mz):
@@ -172,6 +195,13 @@ class SafetyGate:
     def switch_auto_off(self, local_only_call: bool, auto_off_s: float | None) -> float | None:
         cap = float(self.probe.get("switch_auto_off_max_s", 10))
         default = float(self.limits.get("switches", {}).get("auto_off_default_s", cap))
+        if local_only_call and self.dev_mode:
+            if auto_off_s is None:
+                return None
+            val = float(auto_off_s)
+            if not math.isfinite(val) or val <= 0:
+                raise Rejected("auto_off_s must be a positive number")
+            return val
         if local_only_call:
             val = default if auto_off_s is None else float(auto_off_s)
             if not 0 < val <= cap:
@@ -189,7 +219,7 @@ class SafetyGate:
             raise Rejected(f"{device}: target {target_c} C above max {max_c} C")
         if not 0 < timeout_s <= max_timeout:
             raise Rejected(f"{device}: timeout_s is mandatory and must be in (0, {max_timeout}]")
-        first_heat = self.real and lim.get("source") != "measured"
+        first_heat = self.real and not self.dev_mode and lim.get("source") != "measured"
         default_v = float(self.probe.get("heat_max_volts", 6.5))
         max_v = float(lim.get("probe_max_volts", default_v))
         if not math.isfinite(max_v) or max_v <= 0:
