@@ -70,6 +70,7 @@ modules:
       tape_gantry:
         driver: printer_gantry
         port: {port: COM22, baudrate: 115200, timeout: 2}
+        command_settle_s: 0.05     # v1 printer_controller.send_gcode wait after acknowledgement
         stop_gcode: [M410]          # Marlin quick stop; NOT used by v1 (confirm at L2)
         source: v1
         cite: {at: "common/hardware/defaults.py:18", check: "COM22"}

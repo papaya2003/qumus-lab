@@ -85,6 +85,15 @@ class SafetyGate:
             raise Rejected(f"{device} ({kind}) cannot be jogged")
         key, default = caps[kind]
         cap = float(self.probe.get(key, default))
+        if kind == "arm" and axis == "z":
+            arm_limits = self.limits.get("arms", {}).get(device, {})
+            cap = float(arm_limits.get("probe_z_jog_max_mm", cap))
+        if kind == "gantry" and axis in ("x", "z"):
+            cap = float(self.probe.get(f"gantry_{axis}_jog_max_mm", cap))
+        if kind == "manipulator" and axis == "z":
+            cap = float(self.probe.get("stamp_z_jog_max_mm", cap))
+        if not math.isfinite(cap) or cap <= 0:
+            raise Rejected(f"invalid jog cap for {device}.{axis}")
         if abs(amount) > cap:
             unit = "um" if kind == "focus" else ("deg" if kind == "tape_reels" else "mm")
             raise Rejected(f"jog {amount} {unit} is above the cap {cap} {unit} for {device}")
@@ -171,14 +180,17 @@ class SafetyGate:
         if not 0 < timeout_s <= max_timeout:
             raise Rejected(f"{device}: timeout_s is mandatory and must be in (0, {max_timeout}]")
         first_heat = self.real and lim.get("source") != "measured"
-        max_v = float(self.probe.get("heat_max_volts", 6.5))
+        default_v = float(self.probe.get("heat_max_volts", 6.5))
+        max_v = float(lim.get("probe_max_volts", default_v))
+        if not math.isfinite(max_v) or max_v <= 0:
+            raise Rejected(f"{device}: invalid heater voltage cap")
         if first_heat:
             cap_c = float(self.probe.get("first_heat_max_c", 40))
             if target_c > cap_c:
                 raise Rejected(f"{device}: heater not measured yet; first heats are capped at {cap_c} C")
             if timeout_s > float(self.probe.get("heat_timeout_max_s", 600)):
                 raise Rejected(f"{device}: first heats need timeout_s <= {self.probe.get('heat_timeout_max_s', 600)}")
-            v = max_v if volts is None else float(volts)
+            v = min(default_v, max_v) if volts is None else float(volts)
             if not 0 < v <= max_v:
                 raise Rejected(f"{device}: first heats use at most {max_v} V")
             return {"mode": "until", "volts": v}

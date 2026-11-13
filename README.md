@@ -11,7 +11,7 @@ contract. This repo also runs on its own, without any AI: a debug page and L1-L2
 
 Rewritten from scratch. From Qumus v1 only the bytes sent to each instrument and the measured numbers
 were taken (each value cites its v1 file and line); the structure is new. Nothing was copied from
-qumus-v2. Lab-private repository: no lab data, GDS, model weights or vendor DLLs in git.
+qumus-v2. Raw lab data, GDS, model weights and vendor DLLs are excluded from git.
 
 | Module | Service | Devices |
 | --- | --- | --- |
@@ -47,16 +47,36 @@ code that will talk to the real instruments.
    scripts\probe.bat l1             :: every device of both modules, report in runs\real-lab\probe\
    ```
 
-4. **L2, one actuator at a time** (asks Enter before each step; caps: arm/stage/gantry 0.5 mm, stamp
-   0.1 mm, focus 50 um, switches turn themselves off after <= 10 s, first heats <= 40 C at <= 6.5 V
+4. **L2, one actuator at a time** (asks Enter before each step; exfoliation module first, then stacking,
+   each in the same order: cameras, switches, motion, heater last. Every move is followed by its move back.
+   Both arms' Z tests: +10 mm then -10 mm,
+   configured by each arm's `probe_z_jog_max_mm` in `config/limits.yaml`; ensure 10 mm clearance.
+   Tape gantry X: -10 mm first then +10 mm back (`probe.gantry_x_first_sign`). Tape gantry Z: +5 mm first
+   then -5 mm back (`probe.gantry_z_l2_mm`, `probe.gantry_z_first_sign`): observe whether Z+ is up or down.
+   Other arm axes/stage caps: 0.5 mm. Stamp Z: -5 mm then +5 mm (other stamp axes: 0.1 mm).
+   Focus: -5 mm then +5 mm, with operator-confirmed clearance; expected travel time about 30 s each way.
+   Switches turn themselves off after <= 10 s, first heats <= 40 C;
+   exfoliation test: 40 C at 20 V, transfer test: 40 C at 15 V (per-heater `probe_max_volts`),
    with a mandatory timeout):
 
    ```bat
    scripts\probe.bat switch exfoliation_vacuum on
    scripts\probe.bat jog arm_left z 0.5
-   scripts\probe.bat heat exfoliation_heater 30 --timeout 300
+   scripts\probe.bat heat exfoliation_heater 40 --timeout 300 --volts 20
    scripts\probe.bat l2             :: guided walk through both modules
    ```
+
+   During L2, `s` skips the current device and its remaining steps. After a command, answer `y` if
+   the physical action was correct, `n` if there is a problem and the device is stationary/safe,
+   or `q` to quit. An `n`, connection failure, query failure, or refused command is recorded;
+   the remaining tests for that device (including its return move) are skipped and other devices
+   continue with confirmation. Unknown outcomes, timeouts, stop requests, and safety locks still
+   stop the walk. Each run prints a summary and saves a separate `*-l2-report.json` under
+   `runs/real-lab/probe/`. Software success alone does not mean the physical test passed.
+   Interactive Windows L2 opens each saved camera image in the default image viewer. It tests both desk
+   cameras and the microscope camera; focus moves include before/after microscope images. Return to the
+   terminal to answer the observation prompt. A heater test succeeds only after reaching its target;
+   a timeout below the target is a failed test, even if starting the heat command succeeded.
 
    Ctrl+C at any time = stop every axis and switch heaters off. Every step is logged to
    `runs\real-lab\probe\<date>-probe.jsonl`.

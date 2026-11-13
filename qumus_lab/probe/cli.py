@@ -6,7 +6,7 @@
     qumus-probe capture <camera>            L1: one picture (moves nothing); prints the file path
     qumus-probe jog <device> <axis> <mm>    L2: one small move (caps), asks Enter first
     qumus-probe switch <device> on|off      L2: relay, 'on' turns itself off after <= 10 s
-    qumus-probe heat <device> <target_c> --timeout S   L2: first heat <= 40 C, <= 6.5 V
+    qumus-probe heat <device> <target_c> --timeout S   L2: first heat <= 40 C; per-heater voltage caps
     qumus-probe l2                          L2: guided walk through one actuator at a time (Enter / s / q)
 
 Add --demo to try any command on simulated devices (records go to runs/demo/). Every step is logged
@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import time
 from pathlib import Path
 
 from ..config import LabConfig, load_config
+from ..drivers.base import NoReply, NotConnected, Refused
 from ..launcher import Stack, build_stack
 from ..service.core import ApiError, ContractService
 from ..transport.serial_port import list_serial_ports
@@ -180,7 +182,7 @@ class Probe:
         self.out(f"L1 read: {ok}/{len(results)} devices answered")
         return results
 
-    def capture(self, camera: str) -> dict:
+    def capture(self, camera: str, *, show: bool = False) -> dict:
         """One picture (moves nothing). Prints where the file is, so a person can see which camera it is."""
         if not self.connect(camera):
             return {"result": "not_connected"}
@@ -190,6 +192,12 @@ class Probe:
             path = self.config.runs_dir / "captures" / f"{out['image_id']}.{out.get('ext', 'jpg')}"
             self.out(f"        picture: {path}")
             lc = {**lc, "path": str(path)}
+            if show and not self.demo and sys.platform == "win32":
+                try:
+                    os.startfile(str(path))
+                except OSError as exc:
+                    self.out(f"  [WARN] Image was saved but could not be opened: {exc}. Open {path}")
+                    self.log.write("image_viewer_failed", camera=camera, path=str(path), error=str(exc))
         return lc
 
     def cameras(self) -> list[str]:
@@ -256,73 +264,194 @@ class Probe:
             self.out(f"    {time.strftime('%H:%M:%S')}  {s['temp_c']} C  phase {s['phase']}  {s['set_v']} V")
             self.log.write("heat_watch", device=device_id, **s)
             time.sleep(max(1.0, float(dev.poll_s)))
-        self.out(f"  heater off: {dev.last_off_reason}; now {dev.snapshot()['temp_c']} C")
-        return lc
+        final = dev.snapshot()
+        reached = final["phase"] == "reached" and dev.last_off_reason == "target reached"
+        result = dict(lc, result="ok" if reached else "failed", output=final,
+                      message="target reached" if reached else
+                      f"target {target_c} C not reached: {dev.last_off_reason}; final {final['temp_c']} C")
+        self.out(f"  [{'OK' if reached else 'FAILED'}] heat: {result['message']}")
+        self.log.write("heat_result", device=device_id, result=result["result"], message=result["message"], output=final)
+        return result
+
+    # L2 heat tests (operator request 2026-11-13). Each must stay within the heater's probe_max_volts
+    # and first_heat_max_c in config/limits.yaml, or the SafetyGate refuses it.
+    L2_HEATS = {"exfoliation_heater": (40, 20.0, 300), "transfer_heater": (40, 15.0, 300)}
 
     def l2_plan(self) -> list[tuple[str, str, dict]]:
-        """One actuator at a time, smallest possible step. Both modules, left side first."""
+        """One actuator at a time. Exfoliation module first, then stacking; inside each module the same order:
+        1. cameras (so the views used to watch later tests are known to work),
+        2. switches (auto-off),
+        3. motion, one device and one axis at a time; every move is followed by the move back to the start,
+        4. heater last (slowest, and leaves a warm stage).
+        """
+        lim = self.config.limits
+        probe_limits = lim.get("probe", {})
+
+        def sign(key: str, default: int) -> float:
+            value = float(probe_limits.get(key, default))
+            if value not in (-1, 1):
+                raise ValueError(f"{key} must be +1 or -1")
+            return value
+
+        def move_and_back(module, label, device, axis, first_mm, note="", unit="mm", scale=1.0):
+            first = f"jog {label} {axis} {first_mm * scale:+g} {unit}{f' ({note})' if note else ''}"
+            back = f"jog {label} {axis} {-first_mm * scale:+g} {unit} (back to start)"
+            return [(module, first, {"kind": "jog", "device": device, "axis": axis, "mm": first_mm}),
+                    (module, back, {"kind": "jog", "device": device, "axis": axis, "mm": -first_mm})]
+
+        def heat(module, label, device):
+            target_c, volts, timeout_s = self.L2_HEATS[device]
+            return [(module, f"heat {label} to {target_c:g} C ({volts:g} V, {timeout_s:g} s)",
+                     {"kind": "heat", "device": device, "target_c": target_c, "timeout_s": timeout_s, "volts": volts})]
+
+        arms = lim.get("arms", {})
+        left_z = float(arms.get("arm_left", {}).get("probe_z_jog_max_mm", 0.5))
+        right_z = float(arms.get("arm_right", {}).get("probe_z_jog_max_mm", 0.5))
+        gantry_x = sign("gantry_x_first_sign", -1) * float(probe_limits.get("gantry_x_jog_max_mm", 0.5))
+        gantry_z = sign("gantry_z_first_sign", 1) * float(probe_limits.get("gantry_z_l2_mm", 0.5))
+        stamp_z = sign("stamp_z_first_sign", 1) * float(probe_limits.get("stamp_z_jog_max_mm", 0.1))
+        focus_mm = float(probe_limits.get("focus_l2_step_um", 20)) / 1000.0
+
+        ex, st = "exfoliation", "stacking"
         return [
-            ("exfoliation", "switch exfoliation vacuum on (auto-off)", {"kind": "switch", "device": "exfoliation_vacuum"}),
-            ("exfoliation", "switch exfoliation fan on (auto-off)", {"kind": "switch", "device": "exfoliation_fan"}),
-            ("exfoliation", "jog left arm z +0.5 mm", {"kind": "jog", "device": "arm_left", "axis": "z", "mm": 0.5}),
-            ("exfoliation", "jog left arm z -0.5 mm (back)", {"kind": "jog", "device": "arm_left", "axis": "z", "mm": -0.5}),
-            ("exfoliation", "jog tape gantry z +0.5 mm", {"kind": "jog", "device": "tape_gantry", "axis": "z", "mm": 0.5}),
-            ("exfoliation", "jog tape gantry z -0.5 mm (back)", {"kind": "jog", "device": "tape_gantry", "axis": "z", "mm": -0.5}),
-            ("exfoliation", "heat exfoliation stage to 30 C (6.5 V, 300 s)", {"kind": "heat", "device": "exfoliation_heater",
-                                                                             "target_c": 30, "timeout_s": 300, "volts": 6.5}),
-            ("stacking", "switch sample-stage vacuum on (auto-off)", {"kind": "switch", "device": "stage_vacuum"}),
-            ("stacking", "jog right arm z +0.5 mm", {"kind": "jog", "device": "arm_right", "axis": "z", "mm": 0.5}),
-            ("stacking", "jog right arm z -0.5 mm (back)", {"kind": "jog", "device": "arm_right", "axis": "z", "mm": -0.5}),
-            ("stacking", "jog sample stage x +0.5 mm", {"kind": "jog", "device": "sample_stage", "axis": "x", "mm": 0.5}),
-            ("stacking", "jog sample stage x -0.5 mm (back)", {"kind": "jog", "device": "sample_stage", "axis": "x", "mm": -0.5}),
-            ("stacking", "jog stamp z +0.1 mm (up, away from the chip)", {"kind": "jog", "device": "stamp", "axis": "z", "mm": 0.1}),
-            ("stacking", "jog stamp z -0.1 mm (back)", {"kind": "jog", "device": "stamp", "axis": "z", "mm": -0.1}),
-            ("stacking", "jog focus +0.02 mm (20 um)", {"kind": "jog", "device": "focus", "axis": "z", "mm": 0.02}),
-            ("stacking", "jog focus -0.02 mm (back)", {"kind": "jog", "device": "focus", "axis": "z", "mm": -0.02}),
-            ("stacking", "capture microscope camera", {"kind": "capture", "device": "microscope_camera"}),
-            ("stacking", "heat transfer stage to 30 C (6.5 V, 300 s)", {"kind": "heat", "device": "transfer_heater",
-                                                                       "target_c": 30, "timeout_s": 300, "volts": 6.5}),
+            # exfoliation: cameras -> switches -> motion -> heater
+            (ex, "capture left desk camera", {"kind": "capture", "device": "desk_camera_left"}),
+            (ex, "switch exfoliation vacuum on (auto-off)", {"kind": "switch", "device": "exfoliation_vacuum"}),
+            (ex, "switch exfoliation fan on (auto-off)", {"kind": "switch", "device": "exfoliation_fan"}),
+            *move_and_back(ex, "left arm", "arm_left", "z", left_z),
+            *move_and_back(ex, "tape gantry", "tape_gantry", "x", gantry_x, "note which way is X-"),
+            *move_and_back(ex, "tape gantry", "tape_gantry", "z", gantry_z,
+                           "note which way is Z+ (up or down); check clearance both ways"),
+            *heat(ex, "exfoliation stage", "exfoliation_heater"),
+            # stacking: cameras -> switches -> motion -> heater
+            (st, "capture right desk camera", {"kind": "capture", "device": "desk_camera_right"}),
+            (st, "capture microscope camera", {"kind": "capture", "device": "microscope_camera"}),
+            (st, "switch sample-stage vacuum on (auto-off)", {"kind": "switch", "device": "stage_vacuum"}),
+            *move_and_back(st, "right arm", "arm_right", "z", right_z),
+            *move_and_back(st, "sample stage", "sample_stage", "x", 0.5),
+            *move_and_back(st, "stamp", "stamp", "z", stamp_z, "verify physical direction"),
+            *move_and_back(st, "focus", "focus", "z", -focus_mm, "down first, with before/after images",
+                           unit="um", scale=1000.0),
+            *heat(st, "transfer stage", "transfer_heater"),
         ]
+
+    def _l2_step(self, step: dict, confirm: bool) -> dict:
+        kind, dev = step["kind"], step["device"]
+        if kind == "switch":
+            return self.switch(dev, True, 10.0, confirm=False)
+        if kind == "jog":
+            if dev == "focus" and confirm:
+                before = self.capture("microscope_camera", show=True)
+                if before.get("result") != "ok":
+                    return {"result": "failed", "message": "focus test skipped: baseline microscope image unavailable"}
+                result = self.jog(dev, step["axis"], step["mm"], confirm=False)
+                if result.get("result") != "ok":
+                    return result
+                # The controller reply acknowledges the command; allow the estimated travel time before imaging.
+                travel_s = self.stack.lab.devices[dev].expected_move_s(step["mm"] * 1000.0)
+                self.out(f"  Waiting approximately {travel_s:g} s for focus travel before the after image (Ctrl+C stops).")
+                time.sleep(travel_s)
+                after = self.capture("microscope_camera", show=True)
+                if after.get("result") != "ok":
+                    return {"result": "failed", "message": "focus moved but the after image is unavailable; inspect before continuing"}
+                return dict(result, output={"focus": result.get("output"),
+                                            "before_image": before.get("path"), "after_image": after.get("path")})
+            return self.jog(dev, step["axis"], step["mm"], confirm=False)
+        if kind == "heat":
+            result = self.heat(dev, step["target_c"], step["timeout_s"], step.get("volts"),
+                               confirm=False, watch=confirm)
+            if not confirm and result.get("result") == "ok":
+                off = self.run(dev, {"action": "heat_off", "device": dev})
+                if off.get("result") != "ok":
+                    return off
+            return result
+        return self.capture(dev, show=confirm)
 
     def l2(self, *, confirm: bool = True) -> list[dict]:
         self.out("L2 guided: one actuator at a time. Watch the instrument before pressing Enter.")
+        self.out("s skips the device's remaining tests. Problems are recorded and other devices continue.")
+        self.out("Before continuing past a problem, ensure the device is stationary and safe. "
+                 "Uncertain outcomes and timeouts still stop the walk.")
         done = []
-        for module, text, step in self.l2_plan():
-            if module not in self.stack.services:
-                continue
-            self.out(f"\n[{module}] {text}")
-            if confirm:
-                ans = self.confirm("ready?")
-                if ans == "quit":
-                    break
-                if ans == "skip":
-                    done.append({"step": text, "result": "skipped"})
+        skipped_devices = {}
+        stopped_reason = None
+        plan = [entry for entry in self.l2_plan() if entry[0] in self.stack.services]
+        totals = {m: sum(1 for entry in plan if entry[0] == m) for m, _, _ in plan}
+        numbers: dict[str, int] = {}
+        try:
+            for module, text, step in plan:
+                numbers[module] = numbers.get(module, 0) + 1
+                dev = step["device"]
+                self.out(f"\n[{module} {numbers[module]}/{totals[module]}] {text}")
+                record = {"step": text, "device": dev}
+                if dev in skipped_devices:
+                    record.update(result="skipped", message=skipped_devices[dev])
+                    done.append(record)
+                    self.out(f"  [SKIPPED] {dev}: {skipped_devices[dev]}")
                     continue
-            kind, dev = step["kind"], step["device"]
-            if kind == "switch":
-                r = self.switch(dev, True, 10.0, confirm=False)
-            elif kind == "jog":
-                r = self.jog(dev, step["axis"], step["mm"], confirm=False)
-            elif kind == "heat":
-                r = self.heat(dev, step["target_c"], step["timeout_s"], step.get("volts"), confirm=False, watch=confirm)
-                if not confirm:
-                    self.run(dev, {"action": "heat_off", "device": dev})
-            else:
-                if not self.connect(dev):
-                    r = {"result": "not_connected"}
-                else:
-                    r = self.run(dev, {"action": "capture", "camera": dev})
-            done.append({"step": text, "result": r.get("result")})
-            locked = [n for n, svc in self.stack.services.items() if svc.locked]
-            if locked:
-                self.out(f"  L2 walk stopped: {', '.join(locked)} locked (unknown outcome). Check that instrument, "
-                         "write down what happened, then start the walk again.")
-                self.safe_state("lock during L2")
-                break
-            if confirm and self.ask("  did the instrument do exactly that? [y/n] ").strip().lower() != "y":
-                self.log.write("l2_observation", step=text, observed="NOT as expected")
-                self.out("  noted as NOT as expected (see the probe log)")
-        self.log.write("l2_summary", steps=done)
+                if confirm:
+                    ans = self.confirm("ready? (check clearance and that previous devices are safe)")
+                    if ans == "quit":
+                        stopped_reason = "operator quit"
+                        break
+                    if ans == "skip":
+                        skipped_devices[dev] = "operator skipped device"
+                        record.update(result="skipped", message=skipped_devices[dev])
+                        done.append(record)
+                        continue
+                try:
+                    r = self._l2_step(step, confirm)
+                except (NoReply, NotConnected, Refused) as exc:
+                    # These may escape from the read BEFORE a jog/heat command is submitted.
+                    r = {"result": "failed", "message": f"pre-command check failed: {type(exc).__name__}: {exc}"}
+                    self.out(f"  [FAILED] {r['message']}")
+                except Exception as exc:  # noqa: BLE001 - unexpected errors cannot safely be ignored
+                    r = {"result": "error", "message": f"{type(exc).__name__}: {exc}"}
+                    stopped_reason = "unexpected error; hardware outcome not verified"
+                record.update(result=r.get("result"), message=r.get("message") or "")
+                if r.get("output") is not None:
+                    record["output"] = r["output"]
+                done.append(record)
+                locked = [n for n, svc in self.stack.services.items() if svc.locked]
+                if locked or r.get("result") in ("timeout", "stopped") or stopped_reason:
+                    stopped_reason = stopped_reason or (f"{', '.join(locked)} locked (unknown outcome)" if locked
+                                                        else f"command {r['result']}")
+                    self.out(f"  L2 walk stopped: {stopped_reason}. Check the instrument before continuing.")
+                    self.safe_state("L2 safety stop")
+                    break
+                if r.get("result") != "ok":
+                    skipped_devices[dev] = f"earlier test {r.get('result')}"
+                    self.out(f"  Remaining {dev} tests will be skipped; next device still needs confirmation.")
+                    continue
+                if confirm:
+                    while True:
+                        observed = self.ask("  did the instrument do exactly that? "
+                                            "[y = yes, n = problem but stationary/safe; skip device, q = quit] ").strip().lower()
+                        if observed in ("y", "n", "q"):
+                            break
+                        self.out("  Enter y, n, or q.")
+                    record["observed"] = {"y": "as expected", "n": "NOT as expected", "q": "not verified"}[observed]
+                    self.log.write("l2_observation", test_step=text, device=dev, observed=record["observed"])
+                    if observed == "q":
+                        stopped_reason = "operator quit after command"
+                        break
+                    if observed == "n":
+                        record.update(command_result=record["result"], result="not_as_expected")
+                        skipped_devices[dev] = "operator reported a problem"
+                        self.out(f"  Problem recorded. Skipping remaining {dev} tests, including any return move. "
+                                 "Its starting position is NOT assumed restored.")
+        except KeyboardInterrupt:
+            stopped_reason = "Ctrl+C"
+            raise
+        finally:
+            report = self.log.dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1000000:06d}-l2-report.json"
+            report.write_text(json.dumps({"demo": self.demo, "steps": done, "stopped_reason": stopped_reason},
+                                         indent=2), encoding="utf-8")
+            self.log.write("l2_summary", steps=done, stopped_reason=stopped_reason, report=str(report))
+            self.out("\nL2 summary (command results; physical observations are recorded separately):")
+            for record in done:
+                self.out(f"  [{record['result'].upper()}] {record['step']}")
+            self.out(f"L2 report: {report}")
         return done
 
 
@@ -367,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "l1":
             probe.l1()
         elif args.cmd == "capture":
-            probe.capture(args.camera)
+            probe.capture(args.camera, show=True)
         elif args.cmd == "jog":
             probe.jog(args.device, args.axis, args.mm)
         elif args.cmd == "switch":

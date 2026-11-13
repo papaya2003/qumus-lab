@@ -3,6 +3,9 @@
 Each item says what the code does now, so nothing waits on the answer. Check them during L1-L2 and
 update `config/` (and this page) with what the bench shows.
 
+Current bench status and operator-requested settings: [2026-11-08 handoff](handoff-2026-11-08.md).
+The tested motions have operator feedback, but this is not complete calibration of all devices/axes.
+
 ## Before L1 (ports and identities)
 
 1. **COM ports.** `devices.yaml` uses the v1 numbers (arm left COM7, arm right COM23, supply COM8,
@@ -45,14 +48,18 @@ update `config/` (and this page) with what the bench shows.
 13. **Reels.** Degrees per mm of tape are not known; `advance_tape` is capped at 10 deg in real mode.
 14. **Gantry.** `M410` (quick stop) is untested on this Marlin. v1's gantry homing sequence is not
     ported; `apply_tape` / `peel_tape` use the v1 relative arcs and need a known start point.
+    Real jogs still fail physically after restoring v1 motor-enable/pacing and fixing reply consumption.
+    Compare current front-panel/v1 behavior and actual serial exchanges before calling this resolved.
 15. **Stamp vacuum** is `safe_state_on`: stop and STOP ALL leave it on so a held stamp does not drop.
     Correct?
 
 ## Heaters
 
 16. **First heats.** v1 boosts at 27 V until the target. At low targets (30 to 40 C) that overshoots,
-    so in real mode an unmeasured heater only runs `until` at <= 6.5 V and <= 40 C, always with a
-    timeout. Measure the curve, then raise the caps in `limits.yaml`.
+    so in real mode an unmeasured heater runs `until` at <= 40 C with a timeout. At the operator's
+    request, the exfoliation heater now permits 15 V; the transfer heater remains capped at 6.5 V.
+    The exfoliation test at 15 V reached 38.12 C before its 300 s timeout, not the 40 C target.
+    Its curve and warm-up performance remain uncalibrated.
 17. **Transfer heater** has only one v1 hold point (155 C at 16.0 V). Other targets have no hold
     voltage until measured.
 18. **Crash while heating.** If the PC or Python dies while the supply is on, nothing in software can
@@ -66,7 +73,9 @@ update `config/` (and this page) with what the bench shows.
 
 Found in the 11-08 safety self-review and not changed (see `tests/test_fault_injection.py` for what was):
 - `focus_by` sends the TMCL move and returns at once, so a lease expiry during a long focus move does not
-  stop it (the 50 um cap keeps it short). Waiting for the move needs the GAP position query (item 9).
+  stop it. The operator-requested cap is now 5000 um (5 mm), so do not rely on the old 50 um cap to
+  keep this short. Interactive L2 waits the estimated travel time before its after image, but this
+  does not implement closed-loop service-level completion. That still needs the GAP query (item 9).
 
 20. **Both modules in one process** (shared supply on COM8, Windows COM ports are exclusive). Each
     module still has its own port, lease and lock. OK, or should the supply move to its own service?

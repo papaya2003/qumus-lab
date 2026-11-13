@@ -3,11 +3,12 @@
 Call sequence from v1 common/hardware/KST201_controller.py / KDC101_controller.py:
 BuildDeviceList -> Create<KCube>(serial) -> Connect(serial) -> WaitForSettingsInitialized(10000)
 -> LoadMotorConfiguration(serial) -> StartPolling(200 ms) -> EnableDevice; MoveTo(Decimal(mm), timeout_ms);
-velocity via GetVelocityParams/SetVelocityParams; positions via ``Position``.
+velocity via GetVelocityParams/SetVelocityParams; fresh positions via RequestPosition then ``Position``.
 
 Changed on purpose: EnableDevice is sent on the first move, not on connect; MoveTo is issued non-blocking
 (timeout 0) and polled so Stop can interrupt it, with a ``move_timeout_s`` limit (v1 blocked up to 600 s);
 the goniometer is read-only (no v1 flow moved it).
+An idle status alone is not completion: the reported target must settle within 1 um (configurable).
 pythonnet and the Kinesis DLLs are imported lazily and only on Windows (path in config/devices.yaml).
 """
 
@@ -82,7 +83,7 @@ class DotNetKCube:
         except Exception:
             pass
         d.StartPolling(self.polling_ms)
-        time.sleep(0.1)
+        time.sleep(max(0.1, 2 * self.polling_ms / 1000.0))
         self.dev = d
 
     def enable(self) -> None:
@@ -90,6 +91,8 @@ class DotNetKCube:
         time.sleep(0.1)
 
     def position(self) -> float:
+        self.dev.RequestPosition()
+        time.sleep(self.polling_ms / 1000.0)
         return float(str(self.dev.Position))
 
     def is_moving(self) -> bool:
@@ -129,6 +132,7 @@ class KinesisAxis:
         self.max_mm = float(cfg.get("max_mm", 13.0))
         self.read_only = bool(cfg.get("read_only", False))
         self.move_timeout_s = move_timeout_s
+        self.position_tolerance_mm = float(cfg.get("position_tolerance_mm", 0.001))
         self.enabled = False
         self.pos_mm: float | None = None
 
@@ -153,16 +157,27 @@ class KinesisAxis:
         except Exception as exc:
             raise OutcomeUnknown(f"axis {self.name}: {exc}") from exc
         t0 = time.monotonic()
-        while self.backend.is_moving():
+        settled_since = None
+        while True:
             if stop_evt is not None and stop_evt.is_set():
                 # the stop may have reached the K-Cube just before this move: stop again, then report it
                 self.backend.stop()
                 self.read()
                 raise Interrupted(f"axis {self.name}: stopped during the move")
-            if time.monotonic() - t0 > self.move_timeout_s:
-                raise OutcomeUnknown(f"axis {self.name}: still moving after {self.move_timeout_s} s")
+            position = self.read()
+            moving = self.backend.is_moving()
+            now = time.monotonic()
+            if not moving and abs(position - mm) <= self.position_tolerance_mm:
+                settled_since = now if settled_since is None else settled_since
+                if now - settled_since >= 0.25:
+                    return position
+            else:
+                settled_since = None
+            if now - t0 > self.move_timeout_s:
+                self.backend.stop()
+                raise OutcomeUnknown(f"axis {self.name}: target {mm} mm not confirmed after "
+                                     f"{self.move_timeout_s} s (position {position} mm, moving={moving})")
             time.sleep(0.05)
-        return self.read()
 
 
 class StampManipulator(Device):

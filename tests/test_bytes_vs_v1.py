@@ -68,6 +68,7 @@ def _arm(f):
 def _gantry(f):
     g = PrinterGantry("tape_gantry", {"port": {"port": "COM22", "baudrate": 115200, "timeout": 2}, "open_settle_s": 0}, f)
     g.connect()
+    g.power(True)  # v1's constructor already enabled motors; compare the operation from the same state
     return g
 
 

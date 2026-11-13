@@ -144,6 +144,7 @@ def test_selfcheck_windows_branches(monkeypatch, tmp_path):
     exe = tmp_path / "dracal-usb-get.exe"
     exe.write_text("", encoding="utf-8")
     cfg.devices["shared"]["dracal"]["exe_path"] = str(exe)
+    cfg.devices["modules"]["stacking"]["devices"]["stamp"]["kinesis_dir"] = str(tmp_path / "missing-kinesis")
     vp = {r.name: r.status for r in selfcheck.check_vendor_paths(cfg)}
     assert vp["Dracal exe"] == "PASS" and vp["Kinesis folder (stamp)"] == "WARN"
 
