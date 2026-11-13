@@ -1,6 +1,7 @@
 /* Qumus lab bench debug page. Talks to the module services through /m/<module>/api/... (contract v1).
-   Layout (2026-11-13 redesign, Hearth design system): cameras on top, then one card per moving device whose
-   position boxes show the live value and take a typed target, then heaters / switches, then the rest. */
+   Layout (2026-11-13 redesign, Hearth design system): cameras on top, then one block per physical unit (UNITS:
+   arm / tape / exfoliation stage; arm / sample stage / stamp / microscope). Position boxes show the live value
+   and take a typed target; suction, switches and gantry motors are one toggle each. */
 "use strict";
 
 const CLIENT = "debug-page-" + Math.random().toString(36).slice(2, 6);
@@ -43,7 +44,22 @@ function fmt(v, digits = 3) {
   if (v === null || v === undefined) return "n/a";
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(digits);
+  if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+/* Replace an element's children only when what they show changed, so text on the page stays selectable
+   between the 0.5 s refreshes. */
+function setKids(el, nodes) {
+  const box = h("div", {}, nodes);
+  if (el.dataset.sig === box.innerHTML) return;
+  el.dataset.sig = box.innerHTML;
+  el.replaceChildren(...box.childNodes);
+}
+
+/* The connection dot in a card's head. */
+function setDot(el, st, busy = false) {
+  $(".dot", el).className = "dot " + (!st.connected ? "bad" : busy ? "busy" : "ok");
 }
 
 /* ------------------------------------------------------------------ commands */
@@ -95,15 +111,29 @@ const DEV_STEPS = {
 };
 // Small facts under the position boxes (read-only fields of the device).
 const FACTS = {
-  arm: [["vacuum_on", "suction"], ["pose_trusted", "position trusted"], ["moving", "moving"]],
+  arm: [["pose_trusted", "position trusted"], ["moving", "moving"]],
   stage: [["moving", "moving"]],
   manipulator: [["goni_deg", "goniometer", "deg"]],
-  gantry: [["motors_on", "motors on"]],
+  gantry: [],
   focus: [],
 };
 const axisKey = (kind, axis) => (kind === "focus" ? "z_um" : `${axis}_mm`);
 const axisUnit = (kind) => (kind === "focus" ? "um" : "mm");
-const GROUP = (kind) => (kind === "camera" ? "cams" : MOTION[kind] ? "motion" : (kind === "heater" || kind === "switch") ? "io" : kind === "turret" ? "turret" : "other");
+
+/* One block per physical unit, in bench order. A device not listed here goes to its kind's block (arm) or to
+   "Other devices", so a new device in devices.yaml still shows up. */
+const UNITS = {
+  exfoliation: [["Arm", ["arm_left"]], ["Tape", ["tape_gantry", "tape_reels"]],
+                ["Exfoliation stage", ["exfoliation_heater", "exfoliation_vacuum", "exfoliation_fan"]]],
+  stacking: [["Arm", ["arm_right"]], ["Sample stage", ["sample_stage", "stage_vacuum", "transfer_heater"]],
+             ["Stamp", ["stamp", "stamp_vacuum"]], ["Microscope", ["focus", "turret"]]],
+};
+// Short names inside a block (the device id stays beside it, small, because the L3 sheet and points.yaml use it).
+const LABELS = {
+  tape_gantry: "Gantry", tape_reels: "Reels", exfoliation_heater: "Heater", exfoliation_vacuum: "Vacuum",
+  exfoliation_fan: "Fan", sample_stage: "Stage", stage_vacuum: "Vacuum", transfer_heater: "Heater",
+  stamp: "Holder", stamp_vacuum: "Vacuum", focus: "Focus", turret: "Objectives",
+};
 
 /* ------------------------------------------------------------------ buttons */
 /* Hold-to-move: every step is an ordinary jog that the gate checks; the next one is sent only after the last one
@@ -173,6 +203,32 @@ function guarded(mod, action, label, paramsFn, cls = "") {
   return b;
 }
 
+/* One switch-style button that shows the state and flips it: [label (track) On]. When the state is unknown
+   (never switched since connecting) a click sends OFF, so turning something off is always one click.
+   ``paramsFn(on)`` returns the command parameters (null = cancel). */
+function toggleButton(mod, action, label, paramsFn) {
+  const word = h("span", { class: "toggle__word" }, "?");
+  const b = h("button", { type: "button", class: "toggle", role: "switch", "aria-checked": "false", "data-action": action },
+    h("span", { class: "toggle__label" }, label), h("span", { class: "toggle__track", "aria-hidden": "true" }, h("i")), word);
+  b.on = null;
+  b.addEventListener("click", async () => {
+    const p = paramsFn(b.on === false);
+    if (p === null) return;
+    b.disabled = true;
+    await send(mod, action, p);
+    setTimeout(() => refreshGuards(modules[mod]), 200);
+  });
+  b.set = (on, note) => {
+    b.on = on === null || on === undefined ? null : Boolean(on);
+    b.classList.toggle("is-on", b.on === true);
+    b.setAttribute("aria-checked", String(b.on === true));
+    word.textContent = b.on === null ? "unknown" : b.on ? "On" : "Off";
+    b.dataset.tip = `${label}: ${word.textContent.toLowerCase()}${note ? ` (${note})` : ""}. Click to turn ${b.on === false ? "on" : "off"}.`;
+  };
+  b.set(null);
+  return b;
+}
+
 function numInput(value, min, max, step, title) {
   return h("input", { type: "number", value, min, max, step, title, "aria-label": title });
 }
@@ -190,8 +246,14 @@ function refreshGuards(m) {
 /* ------------------------------------------------------------------ cards */
 function card(mod, d, extraClass = "") {
   const el = h("article", { class: `card ${extraClass}`, id: `dev-${mod}-${d.id}` });
-  el.append(h("div", { class: "card__head" }, h("span", { class: "dot" }), h("span", { class: "card__name" }, d.id),
-    h("span", { class: "card__kind" }, d.kind + (d.source ? ` · values from ${d.source}` : ""))));
+  const label = LABELS[d.id];
+  const head = h("div", { class: "card__head" }, h("span", { class: "dot" }), h("span", { class: "card__name" }, label || d.id),
+    h("span", { class: "card__id", title: d.kind + (d.source ? ` · values from ${d.source}` : "") }, label ? d.id : d.kind));
+  if (modules[mod].describe.commands.read) {
+    head.append(h("button", { type: "button", class: "icon", "data-action": "read", "data-tip": `read ${d.id} again`, "aria-label": `read ${d.id} again`,
+      onclick: () => send(mod, "read", { device: d.id }) }, "↻"));
+  }
+  el.append(head);
   return el;
 }
 
@@ -203,18 +265,30 @@ function motionCard(mod, d) {
   const axes = MOTION[d.kind];
   const steps = devMode ? DEV_STEPS[d.kind] : STEPS[d.kind];
   const step = h("select", { "aria-label": `${d.id} step` }, steps.map((s) => h("option", { value: s }, d.kind === "focus" ? `${Math.round(s * 1000)} um` : `${s} mm`)));
-  const head = h("div", { class: "pos__head" }, h("span", { class: "muted small" }, `Position (${unit})`));
+  const help = "Type a value and press Enter (or Move) to go there; Esc puts the live value back. − / + steps once, hold to keep stepping."
+    + (d.kind === "arm" ? " Several edited axes move one after another: z up first, z down last." : " Several edited axes move one after another, top to bottom.");
+  const head = h("div", { class: "pos__head" }, h("span", { class: "muted small hint", title: help }, `Position (${unit}) `, h("span", { class: "hint__i", "aria-hidden": "true" }, "?")));
   if (m.describe.commands.jog) head.append(h("label", {}, "step ", step));
   el.append(head);
   const rows = {};
   const ui = { el, rows, kind: d.kind, id: d.id };
   for (const axis of axes) {
-    const inp = h("input", { type: "number", step: d.kind === "focus" ? "1" : "0.01", "aria-label": `${d.id} ${axis} (${unit})`, class: "mono" });
+    // a text box (not type=number) so the live value can be refreshed without losing a select-all; arrow keys
+    // change the typed value by the chosen step (nothing moves until Enter)
+    const inp = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", spellcheck: "false", "aria-label": `${d.id} ${axis} (${unit})`, class: "mono num" });
     const now = h("div", { class: "axis__now" });
-    inp.addEventListener("input", () => { inp.classList.add("dirty"); renderMotion(m, mod, ui, m.state && m.state.devices[d.id]); });
+    const edited = () => { inp.classList.add("dirty"); renderMotion(m, mod, ui, m.state && m.state.devices[d.id]); };
+    inp.addEventListener("input", edited);
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); moveEdited(mod, ui); }
       if (e.key === "Escape") { inp.classList.remove("dirty"); inp.value = ""; renderMotion(m, mod, ui, m.state && m.state.devices[d.id]); inp.blur(); }
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && Number.isFinite(Number(inp.value)) && inp.value !== "") {
+        e.preventDefault();
+        const st = Number(step.value) * (d.kind === "focus" ? 1000 : 1);
+        const digits = d.kind === "focus" ? 1 : 3;
+        inp.value = (Number(inp.value) + (e.key === "ArrowUp" ? st : -st)).toFixed(digits);
+        edited();
+      }
     });
     const row = h("div", { class: "axis" }, h("span", { class: "axis__name" }, axis, h("span", { class: "axis__unit" }, unit)), inp);
     if (m.describe.commands.jog) {
@@ -226,17 +300,27 @@ function motionCard(mod, d) {
     el.append(row);
   }
   if (d.kind === "arm" && m.describe.commands.rotate_nozzle) {
-    // v1 M2101 R<integer deg>; the arm does not report its nozzle angle: the box shows the last command
-    const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle (deg)`, class: "mono", placeholder: "not sent yet" });
-    const now = h("div", { class: "axis__now" }, "last angle sent; the arm cannot report it");
-    const rot = guarded(mod, "rotate_nozzle", "Rotate", () => {
+    // v1 rotate_nose: M2100 then M2101 R<integer deg> turns the nozzle BY that much from where it is (as in v1;
+    // the arm does not report its angle). The box keeps what you typed until the turn was accepted.
+    const inp = h("input", { type: "number", step: "1", min: "-180", max: "180", "aria-label": `${d.id} nozzle: turn by (deg)`, class: "mono", placeholder: "turn by" });
+    const now = h("div", { class: "axis__now" }, "turns by this much from where it is now");
+    const rot = h("button", { type: "button", class: "sm", "data-action": "rotate_nozzle", "data-tip": "turn the nozzle by the typed angle (v1 M2101 R)" }, "Turn");
+    const turn = async () => {
+      if (!canRun(m, "rotate_nozzle").ok || rot.dataset.busy === "1") return;
       const v = Math.round(Number(inp.value));
-      if (inp.value === "" || !Number.isFinite(v) || v < -180 || v > 180) { flash(mod, "nozzle angle must be -180 to 180", "failed"); return null; }
-      inp.classList.remove("dirty");
-      return { device: d.id, deg: v };
-    }, "sm");
-    inp.addEventListener("input", () => inp.classList.add("dirty"));
-    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); rot.click(); } });
+      if (inp.value === "" || !Number.isFinite(v) || v < -180 || v > 180) { flash(mod, "nozzle turn must be -180 to 180 deg", "failed"); return; }
+      rot.dataset.busy = "1"; rot.disabled = true;
+      try {
+        const r = await send(mod, "rotate_nozzle", { device: d.id, deg: v });
+        if (r.status !== 202) return;
+        inp.value = ""; inp.classList.remove("dirty");
+        const lc = await waitDone(mod, r.data.command_id);  // Turn stays off until this turn finished
+        if (!lc || lc.result !== "ok") flash(mod, `nozzle turn: ${lc ? lc.result + (lc.message ? ", " + lc.message : "") : "no answer"}`, "failed");
+      } finally { delete rot.dataset.busy; refreshGuards(m); }
+    };
+    rot.addEventListener("click", turn);
+    inp.addEventListener("input", () => inp.classList.toggle("dirty", inp.value !== ""));
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); turn(); } });
     el.append(h("div", { class: "axis axis--note" }, h("span", { class: "axis__name" }, "nozzle", h("span", { class: "axis__unit" }, "deg")), inp, rot, h("span"), now));
     rows.nozzle = { inp, now, nozzle: true };
   }
@@ -261,19 +345,18 @@ function motionCard(mod, d) {
     el.append(h("div", { class: "goto" }, h("span", { class: "muted small" }, "Go to point"), sel, go));
   }
   const act = h("div", { class: "actions" });
-  if (d.kind === "arm") {
-    act.append(guarded(mod, "arm_suction", "Suction on", () => ({ device: d.id, on: true }), "sm"),
-               guarded(mod, "arm_suction", "Suction off", () => ({ device: d.id, on: false }), "sm"));
+  if (d.kind === "arm" && m.describe.commands.arm_suction) {
+    ui.toggle = { key: "vacuum_on", b: toggleButton(mod, "arm_suction", "Suction", (on) => ({ device: d.id, on })) };
   }
   if (d.kind === "gantry" && m.describe.commands.gantry_power) {
-    act.append(guarded(mod, "gantry_power", "Motors on", () => ({ on: true }), "sm"), guarded(mod, "gantry_power", "Motors off", () => ({ on: false }), "sm"));
+    ui.toggle = { key: "motors_on", b: toggleButton(mod, "gantry_power", "Motors", (on) => ({ on })) };
   }
+  if (ui.toggle) act.append(ui.toggle.b);
   if (d.kind === "gantry" && m.describe.commands.apply_tape) {
     const sp = numInput(500, 50, 500, 50, "peel speed");
-    act.append(guarded(mod, "apply_tape", "Apply tape", null, "sm"), h("label", {}, "peel at ", sp, " mm/min"),
-               guarded(mod, "peel_tape", "Peel tape", () => ({ speed: Number(sp.value) }), "sm"));
+    act.append(guarded(mod, "apply_tape", "Apply tape", null, "sm"),
+               guarded(mod, "peel_tape", "Peel tape", () => ({ speed: Number(sp.value) }), "sm"), h("label", {}, "at ", sp, " mm/min"));
   }
-  if (m.describe.commands.read) act.append(guarded(mod, "read", "Read", () => ({ device: d.id }), "sm"));
   if (act.childNodes.length) el.append(h("div", { class: "sep" }), act);
   el.append(h("div", { class: "err" }));
   m.cards[d.id] = { ...ui, render: (st) => renderMotion(m, mod, ui, st) };
@@ -285,9 +368,14 @@ function resetEdits(m, mod, ui) {
   renderMotion(m, mod, ui, m.state && m.state.devices[ui.id]);
 }
 
-/* Move every edited axis, one after another: z up first, other axes, z down last (no sweep while low). */
+/* Move every edited axis, one after another. Arm: z up first, other axes, z down last (no sweep while low; a
+   bigger arm z is higher). Other devices: which way their z points is not established, so z is moved on its
+   own; edited x / y / rail move in box order. */
 async function moveEdited(mod, ui) {
   const m = modules[mod];
+  if (ui.moving) return;  // a second Enter while the first moves does nothing
+  const g = canRun(m, "move_axis");
+  if (!g.ok) { flash(mod, `move: ${g.why}`, "failed"); return; }
   const st = m.state && m.state.devices[ui.id];
   const plan = [];
   for (const [axis, r] of Object.entries(ui.rows)) {
@@ -298,11 +386,17 @@ async function moveEdited(mod, ui) {
     plan.push({ axis, target: t, cur });
   }
   if (!plan.length) { flash(mod, "type a new value in a position box first", "failed"); return; }
-  const rank = (p) => (p.axis !== "z" ? 1 : (typeof p.cur === "number" && p.target >= p.cur ? 0 : 2));
-  plan.sort((a, b) => rank(a) - rank(b));
+  if (ui.kind === "arm") {
+    const rank = (p) => (p.axis !== "z" ? 1 : (typeof p.cur === "number" && p.target >= p.cur ? 0 : 2));
+    plan.sort((a, b) => rank(a) - rank(b));
+  } else if (plan.length > 1 && plan.some((p) => p.axis === "z")) {
+    flash(mod, `${ui.id}: move z on its own (which way is up is not established for this device)`, "failed");
+    return;
+  }
   const unit = axisUnit(ui.kind);
   const text = plan.map((p) => `${p.axis} ${fmt(p.cur)} → ${p.target} ${unit}`).join(", ");
   if (!devMode && !confirm(`Move ${ui.id}: ${text}? Watch the instrument; STOP ALL is at the bottom.`)) return;
+  ui.moving = true;
   if (ui.go) { ui.go.dataset.busy = "1"; ui.go.disabled = true; }
   try {
     for (const p of plan) {
@@ -315,6 +409,7 @@ async function moveEdited(mod, ui) {
       row.inp.value = "";
     }
   } finally {
+    ui.moving = false;
     if (ui.go) delete ui.go.dataset.busy;
     refreshGuards(m);
     renderMotion(m, mod, ui, m.state && m.state.devices[ui.id]);
@@ -323,10 +418,11 @@ async function moveEdited(mod, ui) {
 
 function renderMotion(m, mod, ui, st) {
   if (!st) return;
-  $(".dot", ui.el).className = "dot " + (st.connected ? "ok" : "bad");
+  setDot(ui.el, st);
   for (const [axis, r] of Object.entries(ui.rows)) {
     if (r.nozzle) {
-      if (!r.inp.classList.contains("dirty") && document.activeElement !== r.inp) r.inp.value = st.nozzle_deg === null || st.nozzle_deg === undefined ? "" : String(st.nozzle_deg);
+      const last = st.nozzle_deg;
+      r.now.textContent = typeof last === "number" ? `turns by this much from where it is now · last turn sent ${last} deg` : "turns by this much from where it is now";
       continue;
     }
     const cur = st[axisKey(ui.kind, axis)];
@@ -334,11 +430,19 @@ function renderMotion(m, mod, ui, st) {
     if (r.inp.classList.contains("dirty")) {
       r.now.textContent = `now ${fmt(cur, digits)}`;
     } else {
-      r.now.textContent = "";  // not edited: the box follows the live value (typing marks it edited first)
-      r.inp.value = typeof cur === "number" ? cur.toFixed(digits) : "";
+      // Not edited: the box always follows the live value (typing marks it edited first).
+      r.now.textContent = "";
+      const v = typeof cur === "number" ? cur.toFixed(digits) : "";
+      if (r.inp.value !== v) {
+        // keep a select-all (you are about to type over it) when the live value changes under the cursor
+        const all = document.activeElement === r.inp && r.inp.value !== "" && r.inp.selectionStart === 0 && r.inp.selectionEnd === r.inp.value.length;
+        r.inp.value = v;
+        if (all) r.inp.select();
+      }
     }
   }
-  ui.facts.replaceChildren(...(FACTS[ui.kind] || []).filter(([k]) => k in st).map(([k, label, unit]) =>
+  if (ui.toggle) ui.toggle.b.set(st[ui.toggle.key]);
+  setKids(ui.facts, (FACTS[ui.kind] || []).filter(([k]) => k in st).map(([k, label, unit]) =>
     h("span", {}, `${label} `, h("b", {}, fmt(st[k]) + (unit ? ` ${unit}` : "")))));
   $(".err", ui.el).textContent = st.error || "";
 }
@@ -361,36 +465,39 @@ function heaterCard(mod, d) {
         if (v.value !== "") p.volts = Number(v.value);
         return p;
       }, "primary"),
-      guarded(mod, "heat_off", "Heat off", () => ({ device: d.id })),
-      m.describe.commands.read ? guarded(mod, "read", "Read", () => ({ device: d.id }), "sm") : null),
+      guarded(mod, "heat_off", "Heat off", () => ({ device: d.id }))),
     h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
-    $(".dot", el).className = "dot " + (!st.connected ? "bad" : st.phase && st.phase !== "off" ? "busy" : "ok");
-    temp.replaceChildren(fmt(st.temp_c, 1), h("small", {}, "°C"));
+    setDot(el, st, st.phase && st.phase !== "off");
+    setKids(temp, [fmt(st.temp_c, 1), h("small", {}, "°C")]);
     const f = [["target", st.target_c, "C"], ["set", st.set_v, "V"], ["phase", st.phase, ""]];
     if (st.deadline_unix && st.phase !== "off") f.push(["off in", Math.max(0, Math.round(st.deadline_unix - Date.now() / 1000)), "s"]);
     if (st.last_off_reason) f.push(["last off", st.last_off_reason, ""]);
-    facts.replaceChildren(...f.map(([k, val, u]) => h("span", {}, `${k} `, h("b", {}, fmt(val, 1) + (u ? ` ${u}` : "")))));
+    setKids(facts, f.map(([k, val, u]) => h("span", {}, `${k} `, h("b", {}, fmt(val, 1) + (u ? ` ${u}` : "")))));
     $(".err", el).textContent = st.error || "";
   } };
   return el;
 }
 
+/* A relay (vacuum, fan): one row, one toggle. Development mode: it stays on until you turn it off. Strict mode:
+   it needs an auto-off time (the service caps it), shown as a small box beside the toggle. */
 function switchCard(mod, d) {
   const m = modules[mod];
-  const el = card(mod, d);
-  const state = h("div", { class: "state" }, h("span", { class: "dot" }), "n/a");
-  // Development mode: no auto-off cap; leave the box empty to keep the switch on until Off.
-  const auto = devMode ? numInput("", 1, 86400, 1, "auto-off seconds (empty = stays on)") : numInput(10, 1, 10, 1, "auto-off seconds");
-  el.append(state, h("div", { class: "actions" },
-    guarded(mod, "set_switch", "On", () => (auto.value === "" ? { device: d.id, on: true } : { device: d.id, on: true, auto_off_s: Number(auto.value) }), "sm"),
-    guarded(mod, "set_switch", "Off", () => ({ device: d.id, on: false }), "sm"),
-    h("label", {}, "auto-off ", auto, " s")), h("div", { class: "err" }));
+  const el = card(mod, d, "card--row");
+  const auto = devMode ? null : numInput(10, 1, 10, 1, "auto-off seconds");
+  const tog = toggleButton(mod, "set_switch", LABELS[d.id] || d.id, (on) =>
+    (on && auto ? { device: d.id, on, auto_off_s: Number(auto.value) } : { device: d.id, on }));
+  $(".toggle__label", tog).classList.add("visually-hidden");
+  const note = h("span", { class: "muted small card__note" });
+  $(".card__head", el).append(note, tog);
+  if (auto) $(".card__head", el).append(h("label", { class: "small muted" }, "off after ", auto, " s"));
+  el.append(h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
-    $(".card__head .dot", el).className = "dot " + (st.connected ? "ok" : "bad");
-    const on = st.on;
-    state.replaceChildren(h("span", { class: "dot " + (on ? "ok" : "") }), on === null || on === undefined ? "unknown" : on ? "On" : "Off",
-      st.confirmed === false ? h("span", { class: "muted small" }, " (not confirmed)") : null);
+    setDot(el, st);
+    const unconfirmed = st.on !== null && st.on !== undefined && st.confirmed === false;  // null = never switched yet
+    tog.set(st.on, unconfirmed ? "relay did not confirm" : "");
+    note.textContent = unconfirmed ? "not confirmed" : "";
+    note.title = unconfirmed && st.raw_reply !== undefined ? `relay reply: ${fmt(st.raw_reply)}` : "";
     $(".err", el).textContent = st.error || "";
   } };
   return el;
@@ -407,13 +514,12 @@ function genericCard(mod, d) {
     act.append(h("label", {}, "feed tape ", deg, " deg"), guarded(mod, "advance_tape", "Advance", () => ({ deg: Number(deg.value) }), "sm"));
   }
   if (d.kind === "turret") act.append(...objectiveButtons(mod));
-  if (m.describe.commands.read) act.append(guarded(mod, "read", "Read", () => ({ device: d.id }), "sm"));
   if (act.childNodes.length) el.append(act);
   el.append(h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
-    $(".dot", el).className = "dot " + (st.connected ? "ok" : "bad");
+    setDot(el, st);
     const keys = Object.keys(st).filter((k) => !["kind", "connected", "error"].includes(k));
-    facts.replaceChildren(...keys.map((k) => h("span", {}, `${k.replace(/_/g, " ")} `, h("b", {}, fmt(st[k])))));
+    setKids(facts, keys.map((k) => h("span", {}, `${k.replace(/_/g, " ")} `, h("b", {}, fmt(st[k])))));
     $(".err", el).textContent = st.error || "";
   } };
   return el;
@@ -456,7 +562,7 @@ function cameraCard(mod, d, turret) {
   if (turret) bar.append(h("span", { class: "cam__obj" }, objective, ...objectiveButtons(mod)));
   el.append(bar, view, h("div", { class: "err" }));
   m.cards[d.id] = { el, render: (st) => {
-    $(".dot", el).className = "dot " + (st.connected ? "ok" : "bad");
+    setDot(el, st);
     if (st.last_image_id) {
       const src = `/m/${mod}/api/images/${encodeURIComponent(st.last_image_id)}`;
       if (last.dataset.src !== src) { last.dataset.src = src; last.href = src; $("img", last).src = src; last.hidden = false; }
@@ -464,7 +570,13 @@ function cameraCard(mod, d, turret) {
     $(".err", el).textContent = st.error || "";
   } };
   if (turret) {
-    m.cards[turret.id] = { el, render: (st) => { objective.textContent = st.objective ? `${st.objective}x` : "obj ?"; } };
+    // the turret lives on the microscope tile: its own connection and error show here too
+    m.cards[turret.id] = { el, render: (st) => {
+      const bad = !st.connected || st.error;
+      objective.textContent = !st.connected ? "turret not connected" : st.error ? `turret: ${st.error}` : st.objective ? `${st.objective}x` : "objective ?";
+      objective.className = "cam__info" + (bad ? " warn" : "");
+      objective.title = st.error ? `turret: ${st.error}` : "";
+    } };
   }
   return el;
 }
@@ -511,7 +623,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) star
 function renderStatus(m) {
   const st = m.state;
   const box = $(".status", m.el);
-  if (!st) { box.replaceChildren(h("span", { class: "pill locked" }, "Service not reachable")); return; }
+  if (!st) { setKids(box, [h("span", { class: "pill locked" }, "Service not reachable")]); return; }
   const parts = [];
   parts.push(st.locked ? h("span", { class: "pill locked" }, "Locked")
     : h("span", { class: "pill" }, h("span", { class: "dot " + (st.busy ? "busy" : "ok") }), st.busy ? `Busy: ${st.busy_action}` : "Ready"));
@@ -524,7 +636,7 @@ function renderStatus(m) {
   const flashNewer = m.flash && m.flash.until > Date.now() && !(lc && lc.finished_at * 1000 > m.flash.at);
   if (flashNewer) parts.push(h("span", { class: "last " + m.flash.cls }, m.flash.text));
   else if (lc) parts.push(h("span", { class: "last " + lc.result }, `${lc.action}: ${lc.result}${lc.message ? ", " + lc.message : ""}`));
-  box.replaceChildren(...parts);
+  setKids(box, parts);
 }
 
 /* Middle board occupancy lock: shared by both modules (one arm at a time). */
@@ -661,18 +773,28 @@ function buildModule(name, d) {
   const scope = d.devices.find((x) => x.kind === "camera" && x.id.includes("microscope"));
   const cams = d.devices.filter((x) => x.kind === "camera").sort((a, b) => (b === scope) - (a === scope));
   for (const dev of cams) $(".cams", el).append(cameraCard(name, dev, dev === scope ? turret : null));
+  if (!cams.length) $(".band--cams", el).classList.add("is-empty");
+  // one block per physical unit; devices not in UNITS: an arm to "Arm", the rest to "Other devices"
+  const blocks = (UNITS[name] || []).map(([title, ids]) => ({ title, ids, devs: [] }));
+  const block = (title) => blocks.find((b) => b.title === title) || (blocks.push({ title, ids: [], devs: [] }), blocks[blocks.length - 1]);
   for (const dev of d.devices) {
-    const g = GROUP(dev.kind);
-    if (g === "cams" || (g === "turret" && scope)) continue;
-    if (g === "motion") $(".motion", el).append(motionCard(name, dev));
-    else if (dev.kind === "heater") $(".io", el).append(heaterCard(name, dev));
-    else if (dev.kind === "switch") $(".io", el).append(switchCard(name, dev));
-    else $(".other", el).append(genericCard(name, dev));
+    if (dev.kind === "camera" || (dev === turret && scope)) continue;
+    const home = blocks.find((b) => b.ids.includes(dev.id));
+    (home || block(dev.kind === "arm" ? "Arm" : "Other devices")).devs.push(dev);
   }
-  for (const [band, grid] of [["band--cams", ".cams"], ["band--motion", ".motion"], ["band--io", ".io"], ["band--other", ".other"]]) {
-    if (!$(grid, el).childElementCount) $(`.${band}`, el).classList.add("is-empty");
+  const units = $(".units", el);
+  for (const b of blocks) {
+    if (!b.devs.length) continue;
+    b.devs.sort((x, y) => (b.ids.indexOf(x.id) + 1 || 99) - (b.ids.indexOf(y.id) + 1 || 99));
+    const body = h("div", { class: "unit__body" });
+    for (const dev of b.devs) {
+      if (MOTION[dev.kind]) body.append(motionCard(name, dev));
+      else if (dev.kind === "heater") body.append(heaterCard(name, dev));
+      else if (dev.kind === "switch") body.append(switchCard(name, dev));
+      else body.append(genericCard(name, dev));
+    }
+    units.append(h("section", { class: "unit", "aria-label": b.title }, h("h2", { class: "unit__title" }, b.title), body));
   }
-  if (!d.commands.jog && !d.commands.move_axis) $(".howto", el).hidden = true;
   m.tab = tabFor(name, MODULE_TITLES[name] || name, d.service);
   $("#modnav").append(m.tab.button);
   return el;

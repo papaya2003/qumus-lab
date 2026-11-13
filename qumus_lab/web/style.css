@@ -73,11 +73,11 @@ button:disabled { color: var(--muted); border-color: var(--hairline); background
 button.step { width: 36px; padding: 0; font: 500 18px/1 var(--font-sans); }
 button.step.holding { background: var(--surface-cream-strong); border-color: var(--primary-active); }
 
-select, input[type="number"] {
+select, input[type="number"], input.num {
   height: 36px; padding: 0 10px; border-radius: var(--radius-md); border: 1px solid var(--control-border);
   background: var(--canvas); color: var(--ink);
 }
-input[type="number"]:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: var(--focus-ring-input); }
+input[type="number"]:focus, input.num:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: var(--focus-ring-input); }
 input[type="number"] { width: 6.5em; font-family: var(--font-mono); }
 
 /* ---------- top nav ---------- */
@@ -126,20 +126,40 @@ input[type="number"] { width: 6.5em; font-family: var(--font-mono); }
 .last.failed, .last.rejected { color: var(--error); }
 .last.stopped { color: var(--primary-active); }
 
-.band { margin-top: var(--space-lg); }
 .band--cams { margin-top: var(--space-md); }
-.band__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs) var(--space-lg); margin-bottom: var(--space-sm); }
-.band__title { font: 500 28px/1.2 var(--font-serif); letter-spacing: -0.3px; color: var(--ink); margin-bottom: var(--space-sm); }
-.band__head .band__title { margin-bottom: 0; }
-.howto { margin: 0; max-width: 70em; }
-.band:empty, .band.is-empty { display: none; }
-.grid { display: grid; gap: var(--space-md); grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); align-items: start; }
+.band.is-empty { display: none; }
+
+/* one block per physical unit (arm / tape / stage ...), side by side on a wide screen */
+.units { display: grid; gap: var(--space-md); margin-top: var(--space-lg); grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
+.unit { background: var(--surface-soft); border-radius: var(--radius-lg); padding: var(--space-sm) var(--space-sm) var(--space-sm); min-width: 0; }
+.unit__title { font: 500 24px/1.2 var(--font-serif); letter-spacing: -0.3px; color: var(--ink); margin: 0 var(--space-xs) var(--space-sm); }
+.unit__body { display: grid; gap: var(--space-sm); }
 
 /* ---------- device card ---------- */
-.card { background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: var(--space-md) var(--space-lg) var(--space-lg); min-width: 0; }
-.card__head { display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm); }
-.card__name { font: 500 16px/1.4 var(--font-sans); color: var(--ink); }
-.card__kind { margin-left: auto; font-size: 12px; color: var(--muted); }
+.card { background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: var(--space-sm) var(--space-md) var(--space-md); min-width: 0; }
+.card__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm); }
+.card__name { font: 500 15px/1.4 var(--font-sans); color: var(--ink); }
+.card__id { font: 400 11.5px/1.4 var(--font-mono); color: var(--muted); }
+.card--row { padding-bottom: var(--space-sm); }
+.card--row .card__head { margin-bottom: 0; }
+.card--row .toggle { margin-left: auto; }
+.card__head button.icon { height: 26px; width: 26px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); font-size: 15px; }
+.card__head button.icon:hover:not(:disabled) { border-color: var(--hairline); color: var(--ink); }
+.card__head button.icon:disabled { background: transparent; border-color: transparent; }
+.card:not(.card--row) .card__head button.icon { margin-left: auto; }
+.card__note { color: var(--warning); }
+.card__head label { display: inline-flex; align-items: center; gap: 6px; }
+.card__head label input { width: 4.5em; height: 30px; }
+
+/* toggle: one button shows the state and flips it */
+.toggle { height: 30px; padding: 0 10px; gap: 8px; font-size: 13px; }
+.toggle__track { position: relative; width: 28px; height: 16px; border-radius: var(--radius-pill); background: var(--muted-soft); flex: none; transition: background .15s; }
+.toggle__track i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: left .15s; }
+.toggle.is-on .toggle__track { background: var(--success); }
+.toggle.is-on .toggle__track i { left: 14px; }
+.toggle__word { min-width: 2.2em; text-align: left; color: var(--ink); }
+.toggle:disabled .toggle__word { color: var(--muted); }
+.toggle:disabled .toggle__track { opacity: .55; }
 .card .err { color: var(--error); font-size: 13px; margin-top: var(--space-xs); }
 .card .err:empty { display: none; }
 .facts { display: flex; flex-wrap: wrap; gap: var(--space-xxs) var(--space-md); font-size: 13px; color: var(--muted); margin-top: var(--space-sm); }
@@ -152,6 +172,8 @@ input[type="number"] { width: 6.5em; font-family: var(--font-mono); }
 .pos__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); margin-bottom: var(--space-xs); }
 .pos__head label { display: inline-flex; align-items: center; gap: var(--space-xs); font-size: 13px; color: var(--muted); }
 .pos__head select { height: 30px; }
+.hint { cursor: help; }
+.hint__i { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--control-border); font-size: 11px; line-height: 1; color: var(--muted); }
 .axis { display: grid; grid-template-columns: 4.2em minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-xs); padding: 3px 0; }
 .axis__name { font-weight: 500; color: var(--ink); }
 .axis__unit { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 2px; }
@@ -234,7 +256,7 @@ input[type="number"] { width: 6.5em; font-family: var(--font-mono); }
 @media (max-width: 767px) {
   .topnav__inner, .bench, .events { padding-left: var(--space-md); padding-right: var(--space-md); }
   .topnav__control { margin-left: 0; width: 100%; justify-content: space-between; }
-  .grid, .cams { grid-template-columns: minmax(0, 1fr); }
+  .units, .cams { grid-template-columns: minmax(0, 1fr); }
   .cam.is-big { grid-column: auto; }
   .estop__btn { min-width: 0; width: 100%; }
   .estop__note { display: none; }
