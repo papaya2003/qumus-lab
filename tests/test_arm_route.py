@@ -179,5 +179,5 @@ def test_go_to_point_follows_the_route(stack):
     r = _cmd(svc, {"action": "go_to_point", "point": "arm_left.slot_S1"})
     assert r["result"] == "ok", r
     xy = [c[1:4] for c in calls if c[0] == "move"]
-    assert xy == [(0.0, 230.0, 95.0), (88.0, 212.0, 95.0), (163.0, 163.0, 95.0), (210.0, 154.0, 30.0),
-                  (210.0, 154.0, 15.0)], xy
+    assert xy == [(0.0, 230.0, 95.0), (88.0, 212.0, 95.0), (163.0, 163.0, 95.0), (200.0, 160.0, 30.0),
+                  (200.0, 160.0, 15.0)], xy

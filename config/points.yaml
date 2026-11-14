@@ -67,7 +67,7 @@ points:
     stage_chip:        {xyz: [10, 252, 85],  approach_z: 95, source: measured, measured_by: "L3 sheet", date: "2026-11-14"}   # one reading; v1: X10 Y256 Z80 (robot_arm_controller.py:217), v1 pick X8 (:301)
     stage_carrier:     {xyz: [0, 229, 82],   approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:366", check: "Z82"}}      # v1 place: Z85 (:258)
     massage_start:     {xyz: [-13, 298, 74], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:400", check: "mx - 13"}}
-    slot_S1:  {xyz: [210, 154, 15], approach_z: 30, source: measured, measured_by: "L3 sheet", date: "2026-11-14"}   # taken before the nozzle-turn fix (PR #21): may be a few mm off, check with Go to point
+    slot_S1:  {xyz: [200, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:14", check: "(200, 160)"}}
     slot_S2:  {xyz: [240, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:15", check: "(240, 160)"}}
     slot_S3:  {xyz: [280, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:16", check: "(280, 160)"}}
     slot_S4:  {xyz: [320, 160, 15], approach_z: 30, source: v1, cite: {at: "database/seed_chip_slots.py:17", check: "(320, 160)"}}
