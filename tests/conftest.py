@@ -13,7 +13,10 @@ from qumus_lab.launcher import build_stack
 
 @pytest.fixture
 def cfg(tmp_path):
-    return load_config(runs_dir=tmp_path / "runs")
+    """The repository config with dev_mode off, so the tests check every cap (tests/test_dev_mode.py covers dev_mode)."""
+    c = load_config(runs_dir=tmp_path / "runs")
+    c.limits["dev_mode"] = False
+    return c
 
 
 @pytest.fixture

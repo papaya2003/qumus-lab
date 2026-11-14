@@ -99,7 +99,7 @@ def place_item(ctx: ActionContext, arm_id: str) -> None:
 
 
 def rotate(ctx: ActionContext, arm_id: str, deg: float) -> None:
-    """v1 rotate_nose: M888 P6, M2100, M2101 R<int>."""
+    """v1 rotate_nose: M888 P6, M2100, M2101 R<int>: turns the nozzle BY deg (relative), as v1 did."""
     ctx.check()
     arm(ctx, arm_id).rotate_nozzle(float(deg))
 
@@ -107,6 +107,20 @@ def rotate(ctx: ActionContext, arm_id: str, deg: float) -> None:
 def park(ctx: ActionContext, arm_id: str) -> dict:
     """v1 home_to_exfoliation_stage (X0 Y220 Z95) / home_to_search_stage (X0 Y260 Z140), G0 F5000."""
     return move_point(ctx, arm_id, "park")
+
+
+def slot_angle(pt: dict, key: str = "stage_nozzle_deg") -> float | None:
+    """A slot's measured nozzle angle a (points.yaml header): how far to turn the nozzle (relative, M2101 R)
+    after picking from this slot so the object sits square on the work stage; going back turns -a. None = not
+    measured (v1 behaviour)."""
+    v = pt.get(key)
+    return None if v is None else float(v)
+
+
+def store_offset(pt: dict, dx: float, dy: float) -> tuple[float, float]:
+    """v1 stored chips a little beside the slot centre it picked from (e.g. x+10, y-10). A measured slot point
+    is where the object sits, so it gets no offset."""
+    return (0.0, 0.0) if pt.get("source") == "measured" else (dx, dy)
 
 
 def store_rotation(x: float, y: float, sx: float, sy: float) -> float:

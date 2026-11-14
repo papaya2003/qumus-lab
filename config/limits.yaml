@@ -6,6 +6,13 @@
 
 version: 1
 
+# Development mode (operator decision 2026-11-13): true switches off the limits that only slow development
+# work: jog and typed-target distance caps, the switch auto-off cap, first-heat caps and
+# require_measured_for_motion; debug-page moves use probe.dev_mode_feed_mm_min. Heater max_c / overshoot /
+# timeouts, STOP ALL, axis ranges, arm min_z, the stamp z floor, the zone lock and the arm max feed stay.
+# Set it to false before unattended or AI-driven runs.
+dev_mode: true
+
 # Real mode: motion to a named point needs a `source: measured` point and measured axis ranges.
 # --demo ignores this (simulated devices).
 require_measured_for_motion: true
@@ -27,6 +34,7 @@ probe:
   focus_l2_step_um: 5000     # down first, then back to the starting position
   reel_jog_max_deg: 10
   jog_feed_mm_min: 300          # arm / gantry feed used by jog and move_axis
+  dev_mode_feed_mm_min: 3000    # dev_mode: jog / move_axis / go_to_point feed (arms: never above max_feed_mm_min)
   # move_axis (debug page "move to"): how far from the position just read one typed target may be.
   # null = no distance cap (operator request 2026-11-13: the 10 mm cap made moves too slow). Axis ranges in
   # `axes:` and arm min_z still apply; stamp z and arm z down (while min_z_mm is null) keep the jog cap above.

@@ -210,15 +210,20 @@ def place_chip_on_transfer_stage(ctx: ActionContext, p: dict) -> dict:
     name, pt = c.place_point(ctx, place, ARM)
     safe_z = _slot_safe_z(pt)
     _device_point(ctx, STAGE, "load")
+    measured = c.slot_angle(pt)
     c.move_point(ctx, ARM, name, z=safe_z)                           # G0 X Y Z30 F5000
     c.move_point(ctx, ARM, name, z=float(pt["xyz"][2]) + RIGHT_PICK_ABOVE_SLOT_MM)  # G0 Z15 F5000
     c.pick_item(ctx, ARM)
     c.move_point(ctx, ARM, name, z=safe_z)                           # G0 Z30 F5000
     c.park(ctx, ARM)                                                 # home_to_search_stage
-    c.rotate(ctx, ARM, float(p.get("angle_deg") or 0.0))
-    c.move_point(ctx, ARM, "stage_chip_place")                       # G0 X{sx-10} Y{sy} Z132 F5000
+    if p.get("angle_deg") is not None:
+        angle = float(p["angle_deg"])
+    else:
+        angle = 0.0 if measured is None else measured
+    c.rotate(ctx, ARM, angle)
+    c.move_point(ctx, ARM, "stage_chip")                             # G0 X{sx-10} Y{sy} Z132 F5000 (v1 place z)
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, "stage_chip_place", z=float(ctx.gate.point(ARM, "stage_chip_place")["approach_z"]),
+    c.move_point(ctx, ARM, "stage_chip", z=float(ctx.gate.point(ARM, "stage_chip")["approach_z"]),
                  feed=c.SLOW_F)                                       # G0 Z140 F1000
     c.park(ctx, ARM)
     ctx.device(STAGE_VACUUM, ("switch",)).set(True)
@@ -232,14 +237,15 @@ def store_chip(ctx: ActionContext, p: dict) -> dict:
     place = p["place"]
     name, pt = c.place_point(ctx, place, ARM)
     x, y = float(pt["xyz"][0]), float(pt["xyz"][1])
-    spt = ctx.gate.check_point(ARM, "stage_chip_place")
-    angle = c.store_rotation(x + 5, y - 10, float(spt["xyz"][0]), float(spt["xyz"][1]))  # :319-330
+    spt = ctx.gate.check_point(ARM, "stage_chip")
+    measured = c.slot_angle(pt)
+    # v1 turns -angle on the way back; a measured slot angle a was turned +a when placing, so angle = a
+    angle = measured if measured is not None else c.store_rotation(x + 5, y - 10, float(spt["xyz"][0]), float(spt["xyz"][1]))  # :319-330
     _device_point(ctx, STAGE, "load")
     ctx.device(STAGE_VACUUM, ("switch",)).set(False)
     c.park(ctx, ARM)
-    pick = ctx.gate.check_point(ARM, "stage_chip_pick")
-    c.move_point(ctx, ARM, "stage_chip_pick", z=float(pick["approach_z"]))   # G0 X{sx-10} Y{sy} Z140 F5000
-    c.move_point(ctx, ARM, "stage_chip_pick", feed=c.SLOW_F)                 # G0 Z130 F1000
+    c.move_point(ctx, ARM, "stage_chip", z=float(spt["approach_z"]))         # G0 X{sx-10} Y{sy} Z140 F5000
+    c.move_point(ctx, ARM, "stage_chip", feed=c.SLOW_F)                      # G0 Z130 F1000
     c.pick_item(ctx, ARM)
     c.park(ctx, ARM)
     safe_z = _slot_safe_z(ctx.gate.check_point(ARM, name))
@@ -250,7 +256,7 @@ def store_chip(ctx: ActionContext, p: dict) -> dict:
     c.move_point(ctx, ARM, name, z=safe_z)
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, STATION, place, sample_id=p.get("sample_id"))
-    return {"chip": sid, "from": STATION, "to": place, "nozzle_deg": round(-angle, 3)}
+    return {"chip": sid, "from": STATION, "to": place, "nozzle_turn_deg": round(-angle, 3)}
 
 
 # ------------------------------------------------------------------------------------------- stamp
@@ -263,17 +269,18 @@ def load_stamp(ctx: ActionContext, p: dict) -> dict:
     name, pt = c.place_point(ctx, place, ARM)
     _device_point(ctx, STAMP, "load")
     ctx.device(STAMP_VACUUM, ("switch",)).set(True)
+    measured = c.slot_angle(pt, "holder_nozzle_deg")
     c.move_point(ctx, ARM, name, z=float(pt.get("approach_z", 150)))         # G0 X254 Y190 Z150 F5000
     c.move_point(ctx, ARM, name)                                             # G0 Z16 F5000
     c.pick_item(ctx, ARM)
     c.move_point(ctx, ARM, name, z=float(pt.get("approach_z", 150)))         # G0 Z150 F5000
     c.move_point(ctx, ARM, "stamp_via")                                      # G0 X200 Y275 Z150 F5000
-    c.rotate(ctx, ARM, STAMP_NOZZLE_DEG)
-    sp = ctx.gate.check_point(ARM, "stamp_place")
-    c.move_point(ctx, ARM, "stamp_place", z=float(sp["approach_z"]))         # G0 X42 Y275 Z150 F5000
-    c.move_point(ctx, ARM, "stamp_place")                                    # G0 Z134 F5000
+    c.rotate(ctx, ARM, STAMP_NOZZLE_DEG if measured is None else measured)
+    sp = ctx.gate.check_point(ARM, "stamp_holder")
+    c.move_point(ctx, ARM, "stamp_holder", z=float(sp["approach_z"]))        # G0 X42 Y275 Z150 F5000
+    c.move_point(ctx, ARM, "stamp_holder")                                   # G0 Z134 F5000
     c.place_item(ctx, ARM)
-    c.move_point(ctx, ARM, "stamp_place", z=float(sp["approach_z"]))         # G0 Z150 F5000
+    c.move_point(ctx, ARM, "stamp_holder", z=float(sp["approach_z"]))        # G0 Z150 F5000
     c.park(ctx, ARM)
     sid = c.move_sample(ctx, place, HOLDER, kind="stamp", sample_id=p.get("sample_id"))
     return {"stamp": sid, "from": place, "to": HOLDER}
@@ -314,15 +321,16 @@ def remove_stamp(ctx: ActionContext, p: dict) -> dict:
 
 def recycle_stamp(ctx: ActionContext, p: dict) -> dict:
     """v1 molecule_recycle_stamp: holder to load, arm picks at (42, 276, 134), holder vacuum off, arm drops
-    the stamp at (-250, 250, 15), home."""
+    the stamp at (-250, 250, 15), home. One stamp_holder point serves placing and picking (v1 placed at
+    Y275 and picked at Y276)."""
     stamp = _stamp_sample(ctx)
     _device_point(ctx, STAMP, "load")
-    rp = ctx.gate.check_point(ARM, "stamp_recycle_pick")
-    c.move_point(ctx, ARM, "stamp_recycle_pick", z=float(rp["approach_z"]))
-    c.move_point(ctx, ARM, "stamp_recycle_pick")
+    rp = ctx.gate.check_point(ARM, "stamp_holder")                            # v1 picked at Y276
+    c.move_point(ctx, ARM, "stamp_holder", z=float(rp["approach_z"]))
+    c.move_point(ctx, ARM, "stamp_holder")
     c.pick_item(ctx, ARM)
     ctx.device(STAMP_VACUUM, ("switch",)).set(False)
-    c.move_point(ctx, ARM, "stamp_recycle_pick", z=float(rp["approach_z"]))
+    c.move_point(ctx, ARM, "stamp_holder", z=float(rp["approach_z"]))
     bp = ctx.gate.check_point(ARM, "stamp_bin")
     c.move_point(ctx, ARM, "stamp_bin", z=float(bp["approach_z"]))
     c.move_point(ctx, ARM, "stamp_bin")
