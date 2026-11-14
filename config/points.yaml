@@ -9,6 +9,8 @@
 # source: sketch -> a demo-only guess (board-grid sketch), for points v1 never fixed. Refused in real mode.
 # source: measured -> measured on the lab PC at L3 (add `measured_by`, `date`). Only these may be
 #               driven to in real mode. In --demo every point may be used.
+# source: operator -> set with the operator, not bench-measured (e.g. the travel ring). Like v1/sketch,
+#               refused in real mode unless dev_mode is on.
 #
 # v1 computed many arm points as "stage centre + offset"; the absolute numbers below are those sums
 # for v1's fixed stage centres (left (0, 256), right (10, 300); robot_arm_controller.py:115, :141).
@@ -37,9 +39,31 @@ zones:
     devices: [arm_left, arm_right]
     points: ["arm_left.slot_S*", "arm_right.slot_S*"]
 
+# Travel routes (operator decision 2026-11-14, qumus_lab/ops/route.py). The left arm can not pass over the tape
+# (it stands tall beside the exfoliation stage), so it goes round on a ring close to its base:
+#   leave straight up (to the approach z of where it is; slowly off the stage), go to the ring point serving the
+#   start, walk the ring point by point to the ring point serving the target, go above the target, straight down.
+# Same area (one board, or the stage): lift, move across at the approach height, go down. Ops and go_to_point use it.
+routes:
+  arm_left:
+    ring_z: 95
+    ring: [travel_L, travel_L1, park, travel_R1, travel_R]   # in order, left board side -> middle board side
+    serve:
+      travel_L: ["left_*"]                                   # left board
+      park: ["stage_*", "massage_start"]                     # exfoliation stage: in and out only through park
+      travel_R: ["slot_S*"]                                  # middle board
+    slow: ["stage_*"]                                        # up / down at F1000 here
+
 points:
   arm_left:
-    park:              {xyz: [0, 220, 95],   source: v1, cite: {at: "common/hardware/robot_arm_controller.py:171", check: "X0 Y220 Z95"}}
+    # Travel ring (routes.arm_left below): Z95, about the shortest radius the arm reaches (Z95: Y223 accepted, Y222
+    # refused; bench 2026-11-14). park is the ring point facing the stage and replaces v1's X0 Y220 Z95 (out of reach).
+    # Path and points agreed with the operator on 2026-11-14 (not bench-measured): source: operator.
+    park:              {xyz: [0, 230, 95],   source: operator, date: "2026-11-14"}   # v1: X0 Y220 Z95 (robot_arm_controller.py:171), out of reach
+    travel_L:          {xyz: [-163, 163, 95], source: operator, date: "2026-11-14"}  # left-board side
+    travel_L1:         {xyz: [-88, 212, 95],  source: operator, date: "2026-11-14"}
+    travel_R1:         {xyz: [88, 212, 95],   source: operator, date: "2026-11-14"}
+    travel_R:          {xyz: [163, 163, 95],  source: operator, date: "2026-11-14"}  # middle-board side
     stage_chip:        {xyz: [10, 252, 85],  approach_z: 95, source: measured, measured_by: "L3 sheet", date: "2026-11-14"}   # one reading; v1: X10 Y256 Z80 (robot_arm_controller.py:217), v1 pick X8 (:301)
     stage_carrier:     {xyz: [0, 229, 82],   approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:366", check: "Z82"}}      # v1 place: Z85 (:258)
     massage_start:     {xyz: [-13, 298, 74], approach_z: 95, source: v1, cite: {at: "common/hardware/robot_arm_controller.py:400", check: "mx - 13"}}

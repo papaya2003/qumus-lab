@@ -51,4 +51,4 @@ def test_every_device_and_point_has_a_source():
             assert dcfg.get("source") in ("v1", "lab", "measured"), dev_id
     for dev, pts in cfg.points["points"].items():
         for name, pt in pts.items():
-            assert pt.get("source") in ("v1", "measured", "sketch"), f"{dev}.{name}"
+            assert pt.get("source") in ("v1", "measured", "sketch", "operator"), f"{dev}.{name}"

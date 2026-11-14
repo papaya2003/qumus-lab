@@ -8,10 +8,12 @@ from __future__ import annotations
 import math
 
 from ..drivers.base import DriverError, OutcomeUnknown
+from ..ops import route
 from ..safety.gate import Rejected
 from .base import Action, ActionContext, Module
 
 MOVERS = ("arm", "stage", "manipulator", "gantry", "focus")
+ROUTE_SLOW_F = 1000.0  # v1 final approach feed (robot_arm_controller.py:219), for the slow route steps
 
 
 # ------------------------------------------------------------------------- reads
@@ -101,6 +103,22 @@ def _prepare_go_to_point(ctx: ActionContext, p: dict):
     dev_id, name = _split_point(ctx.module, p["point"])
     pt = ctx.gate.check_point(dev_id, name)
     dev = ctx.device(dev_id)
+    if dev.kind == "arm" and route.config(ctx.gate.config.points, dev_id) is not None:
+        # an arm with a travel ring goes up, round the ring and down (ops/route.py), never straight across
+        feed = ctx.gate.debug_feed(dev_id, "arm", ctx.gate.arm_feed(dev_id))
+        for ring_pt in route.config(ctx.gate.config.points, dev_id)["ring"]:
+            ctx.gate.check_point(dev_id, ring_pt)
+        steps = route.plan(ctx.gate.config.points, dev_id, dict(dev.pose), name)
+        for s in steps:
+            ctx.gate.check_arm_z(dev_id, s.z)
+
+        def run_route():
+            out = None
+            for s in steps:
+                ctx.check()
+                out = dev.move_to(s.x, s.y, s.z, min(feed, ROUTE_SLOW_F) if s.slow else feed)
+            return out if out is not None else dev.snapshot()
+        return run_route
     if dev.kind == "arm":
         x, y, z = (float(v) for v in pt["xyz"])
         feed = ctx.gate.debug_feed(dev_id, "arm", ctx.gate.arm_feed(dev_id))
