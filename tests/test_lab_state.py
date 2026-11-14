@@ -70,7 +70,7 @@ def test_services_write_device_and_event_rows(stack):
     svc = stack.services["exfoliation"]
     assert _cmd(svc, {"action": "read_all"})["result"] == "ok"
     arm = store.get_device("arm_left")
-    assert arm["online"] and arm["read_at"] and arm["state"]["y_mm"] == 220.0
+    assert arm["online"] and arm["read_at"] and arm["state"]["y_mm"] == 230.0  # the sim arm starts at park
     assert store.get_device("arm_right")["state"] is None  # other module not touched
     msgs = [e["message"] for e in store.list_events(module="exfoliation")]
     assert "service started" in msgs and "command done" in msgs

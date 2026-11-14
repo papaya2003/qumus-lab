@@ -34,11 +34,35 @@ def test_every_named_point_is_in_the_sheet_and_every_point_row_exists():
         assert dev in points and (not name or any(fnmatch.fnmatchcase(p, name) for p in points[dev])), k
 
 
-def test_measured_columns_start_empty_and_ids_are_unique():
+XYZ_RE = re.compile(r"^X(-?[\d.]+) Y(-?[\d.]+) Z(-?[\d.]+)$")
+
+
+def test_ids_are_unique():
     rows = _rows()
     assert len({r["编号"] for r in rows}) == len(rows)
-    for r in rows:
-        assert not any(r[c] for c in ("测量 1", "测量 2", "测量 3", "采用值", "测量人", "日期")), r["编号"]
+
+
+def test_adopted_arm_points_are_written_back_as_measured():
+    """An arm-point row with an adopted value ("采用值", X.. Y.. Z..) must match points.yaml, which then says
+    source: measured; a slot angle in the sheet must match the point's stage_nozzle_deg / holder_nozzle_deg."""
+    points = load_config().points["points"]
+    checked = 0
+    for r in _rows():
+        target = r["写回哪里（qumus-lab）"]
+        m = XYZ_RE.match(r["采用值"].strip())
+        if not (m and target.startswith("points.yaml ")):
+            continue
+        dev, _, name = target.split()[1].partition(".")
+        pt = points[dev][name]
+        assert [float(v) for v in m.groups()] == [float(v) for v in pt["xyz"]], r["编号"]
+        assert pt.get("source") == "measured", r["编号"]
+        deg = r["喷嘴角度（度，槽位属性）"].strip()
+        key = "holder_nozzle_deg" if "holder_nozzle_deg" in target else "stage_nozzle_deg"
+        assert (float(deg) if deg else None) == (None if pt.get(key) is None else float(pt[key])), r["编号"]
+        checked += 1
+    named_measured = [f"{d}.{n}" for d, pts in points.items() for n, p in pts.items()
+                      if p.get("source") == "measured" and "xyz" in p]
+    assert checked == len(named_measured), named_measured
 
 
 @pytest.mark.skipif(not v1_tree_present(), reason="v1 source tree not present")

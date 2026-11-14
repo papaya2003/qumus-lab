@@ -21,7 +21,11 @@ from ..transport.serial_port import PortSpec
 from .base import Device, FirmwareError, NoReply, OutcomeUnknown, Refused, fmt_num
 
 OK_RE = re.compile(r"\bok\b", re.IGNORECASE)
-ERR_RE = re.compile(r"(?:^|[\r\n])(?:error|alarm|unknown command|!!)", re.IGNORECASE)
+ERR_RE = re.compile(r"(?:^|[\r\n])(?:error|alarm|unknown command|!!)|beyond limit", re.IGNORECASE)
+# The DexArm refuses a target outside its reach with "XY beyond limit....." and then still answers "ok"; the
+# arm does not move (bench, 2026-11-14: G0 X0 Y220 Z95 refused, X0 Y223 Z95 accepted). Without this the move
+# looked successful.
+LIMIT_RE = re.compile(r"beyond limit", re.IGNORECASE)
 POSE_RE = re.compile(r"X:([\-\d\.]+)\s+Y:([\-\d\.]+)\s+Z:([\-\d\.]+)")
 BOOT_RE = re.compile(r"start|marlin|grbl", re.IGNORECASE)
 NO_OK_PREFIXES = ("M888",)  # v1 robot_arm_controller.py:15
@@ -168,7 +172,14 @@ class GcodeArm(Device):
             dist = self._distance(x, y, z)
             self.moving = True
             try:
-                self.send(" ".join(parts))
+                try:
+                    self.send(" ".join(parts))
+                except FirmwareError as exc:
+                    if LIMIT_RE.search(str(exc)):
+                        target = " ".join(p for p in parts[1:] if not p.startswith("F"))
+                        raise FirmwareError(f"{self.id}: target {target} is outside the arm's reach "
+                                            f"(controller: 'XY beyond limit'); the arm did not move") from exc
+                    raise
                 if wait:
                     self.finish_moves(expected_s=60.0 * dist / float(feed) if dist is not None else None)
             finally:
@@ -215,12 +226,21 @@ class GcodeArm(Device):
         self.finish_moves(expected_s=1.0)
 
     def rotate_nozzle(self, deg: float) -> None:
-        """v1 rotate_nose: M888 P6, M2100, M2101 R<int deg>. Turns the nozzle BY deg from where it is (relative)."""
+        """v1 rotate_nose: M888 P6, M2100, M2101 R<int deg>. Turns the nozzle BY deg from where it is (relative).
+
+        Changed on purpose: then ``M888 P2`` + ``M400``. M888 picks the DexArm front-end module, and the arm
+        computes XY for that module's tool offset. v1 left the arm in P6 (rotary) after a turn, so every move
+        until the next pump command (M888 P2) went to the wrong XY, and that pump command then shifted the arm
+        (bench, 2026-11-14: a chip carried from the stage to a slot landed off target and, on suction off, the
+        arm first slid to the right XY and then released; each P2<->P6 switch costs ~1 s of motion). Switching
+        back to the pump right after the turn keeps every move in the suction-nozzle frame."""
         self.send("M888 P6")
         self.send("M2100")
         self.send(f"M2101 R{int(deg)}")
         self.nozzle_turned_deg += int(deg)
         self.nozzle_since_pick_deg += int(deg)
+        self.send("M888 P2")
+        self.finish_moves(expected_s=2.0)  # wait for the module switch to settle, then read the pose
 
     def stop(self) -> bool | None:
         if not self.connected:

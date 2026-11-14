@@ -82,6 +82,8 @@ class ArmEmulator(LineEmulator):
         self.drop_replies = False
         self.boot_banner = boot_banner
         self.lines: list[str] = []
+        #: optional reach check (x, y, z) -> bool; False = answer like the DexArm ("XY beyond limit", then ok)
+        self.reachable = None
 
     def attach(self, port) -> None:
         super().attach(port)
@@ -108,6 +110,11 @@ class ArmEmulator(LineEmulator):
                 if ax in args:
                     tgt[ax.lower()] = cur[ax.lower()] + args[ax] if self.relative else args[ax]
             feed = args.get("F", 1000.0)
+            end = {**cur, **tgt}
+            if self.reachable is not None and not self.reachable(end["x"], end["y"], end["z"]):
+                if not self.drop_replies:
+                    self.emit("XY beyond limit.....\r\nok\r\n")
+                return
             self.motion.go(tgt, feed / 60.0)
             self.ok()
         elif cmd == "M400":

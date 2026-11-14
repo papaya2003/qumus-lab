@@ -99,10 +99,7 @@ SCENARIOS = {
                   lambda m: m["robot_arm_controller"].RobotArmController("COM7"),
                   lambda o: o.place_item(),
                   _arm, lambda a: a.release_item()),
-    "arm_rotate_nozzle": ("COM7",
-                          lambda m: m["robot_arm_controller"].RobotArmController("COM7"),
-                          lambda o: o.rotate_nose(50),
-                          _arm, lambda a: (a.rotate_nozzle(50), a.read())),  # v1 polled M114 after each op
+    # arm_rotate_nozzle: deliberate difference, see test_arm_rotate_returns_to_the_pump_module
     "arm_vacuum_on_off": ("COM7",
                           lambda m: m["robot_arm_controller"].RobotArmController("COM7"),
                           lambda o: (o.vacuum_on(), o.vacuum_off()),
@@ -287,6 +284,20 @@ def test_arm_first_move_sends_units_and_absolute_once():
     lines = bytes(factory.opened["COM7"].tx).decode().split("\r\n")
     assert lines.count("G21") == 1 and lines.count("G90") == 1
     assert lines.index("G90") < lines.index("G0 X1 Y220 Z95 F500")
+
+
+def test_arm_rotate_returns_to_the_pump_module():
+    """v1 rotate_nose left the DexArm in front-end module P6 (rotary), so later moves used that module's tool offset
+    and went to the wrong XY until the next pump command (M888 P2) shifted the arm. The new driver sends v1's bytes,
+    then M888 P2 and M400 (wait for the switch), then reads the pose."""
+    factory = FakeSerialFactory(_emus())
+    a = GcodeArm("a", {"port": {"port": "COM7"}, "open_settle_s": 0}, factory)
+    a.connect()
+    factory.opened["COM7"].tx.clear()
+    a.rotate_nozzle(50)
+    assert _golden().get("arm_rotate_nozzle", "M888 P6\r\nM2100\r\nM2101 R50\r\nM114\r\n") == "M888 P6\r\nM2100\r\nM2101 R50\r\nM114\r\n"  # what v1 sent
+    assert bytes(factory.opened["COM7"].tx).decode() == "M888 P6\r\nM2100\r\nM2101 R50\r\nM888 P2\r\nM400\r\nM114\r\n"
+    assert a.nozzle_turned_deg == 50
 
 
 def test_kz100_link_keeps_port_open_same_bytes():

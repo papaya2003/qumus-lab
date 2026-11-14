@@ -8,6 +8,7 @@ import time
 
 from ..modules.base import ActionContext
 from ..safety.gate import Rejected
+from . import route
 
 # v1 feeds (common/hardware/robot_arm_controller.py): travel G0 F5000, final approach F1000, massage G1 F500
 TRAVEL_F = 5000.0   # robot_arm_controller.py:208
@@ -105,8 +106,29 @@ def rotate(ctx: ActionContext, arm_id: str, deg: float) -> None:
 
 
 def park(ctx: ActionContext, arm_id: str) -> dict:
-    """v1 home_to_exfoliation_stage (X0 Y220 Z95) / home_to_search_stage (X0 Y260 Z140), G0 F5000."""
+    """v1 home_to_exfoliation_stage (X0 Y220 Z95) / home_to_search_stage (X0 Y260 Z140), G0 F5000. An arm with a
+    travel ring (routes in points.yaml) goes there along the ring instead of in one straight move."""
+    if route.config(ctx.gate.config.points, arm_id) is not None:
+        return route_to(ctx, arm_id, "park")
     return move_point(ctx, arm_id, "park")
+
+
+def route_to(ctx: ActionContext, arm_id: str, point: str, *, dx: float = 0.0, dy: float = 0.0,
+             stop_above: bool = False, at_ring=None) -> dict:
+    """Go to a named point along the arm's travel route (ops/route.py): straight up, round the ring, straight down.
+    ``at_ring`` = {ring point: callable} runs when the arm reaches that ring point (e.g. the nozzle turn at park).
+    Every ring point is gate-checked like any named point. Returns the last move's snapshot."""
+    dev = arm(ctx, arm_id)
+    for name in (route.config(ctx.gate.config.points, arm_id) or {}).get("ring", []):
+        ctx.gate.check_point(arm_id, name)
+    ctx.gate.check_point(arm_id, point)
+    steps = route.plan(ctx.gate.config.points, arm_id, dict(dev.pose), point, dx=dx, dy=dy, stop_above=stop_above)
+    out = dev.snapshot()
+    for s in steps:
+        out = move(ctx, arm_id, s.x, s.y, s.z, SLOW_F if s.slow else TRAVEL_F, point=s.point or None)
+        if s.kind == "ring" and at_ring and s.point in at_ring:
+            at_ring[s.point]()
+    return out
 
 
 def slot_angle(pt: dict, key: str = "stage_nozzle_deg") -> float | None:

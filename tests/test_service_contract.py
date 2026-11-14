@@ -195,5 +195,5 @@ def test_real_mode_gate_refuses_v1_points(cfg):
         gate.check_point("arm_left", "park")
     cfg2 = cfg.copy()
     cfg2.points["points"]["arm_left"]["park"]["source"] = "measured"
-    assert SafetyGate(cfg2, "exfoliation", demo=False).check_point("arm_left", "park")["xyz"] == [0, 220, 95]
+    assert SafetyGate(cfg2, "exfoliation", demo=False).check_point("arm_left", "park")["xyz"] == [0, 230, 95]
     assert Module  # imported for side effects only
