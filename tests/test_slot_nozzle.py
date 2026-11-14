@@ -69,6 +69,8 @@ def test_load_chip_without_a_measured_angle_keeps_v1(stack):
 
     seed_demo_bench(stack.store)
     m = stack.services["exfoliation"].module
+    pt = {k: v for k, v in m.gate.point("arm_left", "left_chip_1").items() if k != "stage_nozzle_deg"}
+    m.gate.points["arm_left"]["left_chip_1"] = pt   # a slot without a measured angle
     calls = _record(m.devices["arm_left"])
     ox.load_chip(_ctx(m), {"place": "left_chip_1"})
     assert [c[1] for c in calls if c[0] == "rot"] == [0.0]   # v1: rotate_nose(angle_deg=0) once, at the stage
